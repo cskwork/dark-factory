@@ -1,0 +1,88 @@
+# Copy to factory.toml. Relative project_root starts at this file's directory;
+# state_dir and repos start at project_root. Python 3.11+, Bash, and Git required.
+project_root = "."
+state_dir = ".factory"
+repos = "services/*"
+key_pattern = '[A-Z][A-Z0-9]+-\d+'
+key_marker = "[{key}]"
+base_branch = "origin/main"
+branch_prefixes = ["fix/", "feat/"]
+duplicate_window_seconds = 1500
+lock_stale_seconds = 10800
+command_timeout_seconds = 300
+launch_timeout_seconds = 60
+worker_timeout_seconds = 5500
+runbook = "templates/RUNBOOK.template.md"
+
+# TOML insertion order is promotion order. Never infer approval from this order.
+[env_branches]
+dev = "origin/dev"
+stg = "origin/stg"
+prd = "origin/main"
+
+# Commands are argv arrays (recommended) or shlex-quoted strings, never shell.
+# Placeholder expansion happens after splitting, preserving spaces in arguments.
+# Literal braces in commands must be doubled: {{ and }}.
+[launcher]
+command = ["paseo", "run", "--provider", "{provider}", "--model", "{model}", "--thinking", "{thinking}", "--mode", "{mode}", "--cwd", "{cwd}"]
+
+[roles.waker]
+provider = "codex"
+model = "gpt-6-luna"
+thinking = "low"
+mode = "read-only"
+
+[roles.orchestrator]
+provider = "claude"
+model = "claude-opus-5-5"
+thinking = "high"
+mode = "default"
+
+[roles.workers.builder]
+provider = "codex"
+model = "gpt-6.1-sol"
+thinking = "high"
+mode = "workspace-write"
+
+[roles.workers.reviewer]
+provider = "claude"
+model = "claude-opus-5-5"
+thinking = "medium"
+mode = "read-only"
+
+[intake]
+# Adapter prints exactly one JSON object to stdout; see the runbook contract.
+scan_cmd = ["python3", "adapters/intake.py"]
+
+[triage]
+mode = "shadow"
+classifier_cmd = [] # Optional adapter reads {events:[...]} on stdin, returns predictions.
+confidence_threshold = 0.9
+timeout_seconds = 45
+
+[ci]
+view_cmd = ["python3", "adapters/ci.py", "--job", "{job}", "--build", "{build}", "--context", "{context}"]
+[ci.fields]
+status = "status"
+result = "result"
+commit = "commit"
+
+# Each probe exits 0 ready, a configured human exit code for human action,
+# otherwise unavailable. Probe stdout/stderr is never copied to verifier JSON.
+[preflight.probes.service]
+cmd = ["python3", "adapters/probe.py", "service"]
+human_exit_codes = [10]
+
+[decisions.approval]
+on_approve = ["python3", "adapters/approve.py", "--key", "{key}", "--decision", "{decision_id}", "--note", "{note}"]
+
+[decisions.sql]
+# Supply your own importable DB-API module. No database driver is bundled.
+connector_module = "example_connector"
+allowed_config_names = ["sandbox"]
+expected_host_prefixes = ["sandbox-"]
+forbidden_host_substrings = ["prd", "prod", "production"]
+host_query = "SELECT @@hostname"
+[decisions.sql.configs.sandbox]
+# Connector-specific connect(**kwargs); keep credentials outside version control.
+database = "sandbox"

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -eu
+root="$(python3 -c 'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve().parents[1])' "$0")"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m factory.runtime wake "$@"
