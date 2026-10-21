@@ -102,7 +102,9 @@ exist there, build a similar scenario: same screen, content and entry path with
 test accounts in the same user and deployment state; try each plausible value
 of every condition the ticket leaves open; use read-only production logs from
 the incident time to shape the scenario, never the production database. Log
-each attempt as `condition | result | evidence`. One reproducing variant passes
+each attempt as `condition | result | evidence`. Give `preflight` a probe for
+every surface the reproduction uses (database, web front, engine) and store them
+in the queue's needs; a missing probe means the guard cannot resume the wait. One reproducing variant passes
 AS-IS: re-score clarity with what you observed and continue.
 
 Ask only when judgement areas remain, or when every variant failed to
