@@ -58,9 +58,11 @@ def triage(cfg, events, classifier=None):
         if not isinstance(handled, dict):
             raise ValueError("invalid handled state")
         remaining = [event for event in remaining if event["key"] + ":" + event["id"] not in handled]
+        # Ticket intake (e.g. an owned backlog item) is not a comment: never let the classifier skip it.
+        comments = [event for event in remaining if event.get("intake") is not True]
         settings = cfg.get("triage", {})
         command = settings.get("classifier_cmd")
-        if not remaining or (classifier is None and not command):
+        if not comments or (classifier is None and not command):
             return remaining
         if classifier is None:
             def classifier(rows):
@@ -70,7 +72,7 @@ def triage(cfg, events, classifier=None):
                 if response.returncode:
                     raise ValueError("classifier failed")
                 return json.loads(response.stdout)
-        predictions = validate_predictions(classifier(remaining), remaining)
+        predictions = validate_predictions(classifier(comments), comments)
         mode = settings.get("mode", "shadow")
         if mode not in ("shadow", "enforce"):
             raise ValueError("invalid triage mode")
@@ -78,7 +80,7 @@ def triage(cfg, events, classifier=None):
             append_json(cfg.state_dir / "triage-shadow.jsonl", {"at": time.time(), "mode": mode, **row})
         if mode == "shadow":
             return remaining
-        skip = [event for event in remaining
+        skip = [event for event in comments
                 if (row := predictions[(event["key"], event["id"])])["class"] == "information"
                 and row["needs_response"] is False
                 and row["confidence"] >= settings.get("confidence_threshold", 0.9)]

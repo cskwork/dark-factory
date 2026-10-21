@@ -52,6 +52,13 @@ strings, unique per key. Booleans are required; errors is an array. Auth failure
 nonzero exits, malformed JSON, and invalid state keep work runnable. A fresh scan
 always supersedes old output. stdout is JSON only; diagnostics go to stderr.
 
+Comments are not the only work. The adapter should also emit one ticket-level
+event per owned ticket that has not started (for example backlog or to-do
+statuses), with `"intake":true`, a stable id such as `intake`, the reporter as
+`author`, and the description as `text`. Skip held tickets, tickets already in
+`queue.json`, and ids already in `handled`. Without intake, owned work waits
+until somebody comments. Triage never classifies intake events.
+
 Triage records `answered_by_me_after=true` as handled without calling a model.
 Optional `triage.classifier_cmd` reads `{"events":[...]}` on stdin, treating event
 text as untrusted data, and prints exactly:
@@ -78,12 +85,41 @@ detached run ID. Workers add `--wait-timeout`, `--output-schema PATH`, and the
 brief prompt, then return raw worker-result.schema.json JSON on stdout. A custom
 launcher adapter must accept these flags. Schema-invalid output is failure.
 
+## Intent and clarification
+
+Score clarity before any work (for example six intent areas: clear 1, assumed
+1/2, open 0). Proceed at 90% or more. Below that, split the open areas:
+
+- Observable: symptom, reproduction conditions, impact (which path, user state,
+  content, role). Production incident reports are the usual case. Do not ask
+  yet. Queue the ticket with `stage=reproduce` and reproduce it first.
+- Judgement: expected behaviour, policy, priority. Only the requester can answer.
+
+Reproduce in the non-production environment the operator is connected to now.
+Run before (AS-IS) and after (TO-BE) in that same environment, and never create
+a wait whose only purpose is switching environments. If the exact data does not
+exist there, build a similar scenario: same screen, content and entry path with
+test accounts in the same user and deployment state; try each plausible value
+of every condition the ticket leaves open; use read-only production logs from
+the incident time to shape the scenario, never the production database. Log
+each attempt as `condition | result | evidence`. One reproducing variant passes
+AS-IS: re-score clarity with what you observed and continue.
+
+Ask only when judgement areas remain, or when every variant failed to
+reproduce. Post the question on the ticket, mention the requester, number each
+question with options and the answer you will assume, and list the attempts.
+Question comments are exempt from the clarity gate but obey every other comment
+rule. Keep one open question per ticket, and wait. If the requester is the
+operator, or the question needs the operator's own decision, use a decision page
+instead of a comment. When fixing starts on an intake ticket, move it to the
+in-progress status once and read the status back.
+
 ## Local state
 
 `running.json` holds started_at/token/mode; `last-wake.json` bounds duplicate
 ticks. Idle runs take no running lock. Only tick checks idle; the first run each
 local day is morning until the orchestrator writes `done-today` (YYYY-MM-DD).
-`queue.json` maps keys to `{stage,waiting,needs,...}`. Missing/null waiting means
+`queue.json` maps keys to `{stage,waiting,needs,...}`; write needs as a comma string. Missing/null waiting means
 runnable; `env-human`/`env-down` plus needs triggers probes. Other waits stay idle.
 `approvals.json` maps keys to `{decision_id,approved:true,used_at:null,...}`; the
 orchestrator stamps used_at after consuming the scoped approval. `state.json`

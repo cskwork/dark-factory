@@ -43,6 +43,18 @@ class TriageTests(Fixture):
                 self.assertEqual(triage(self.cfg, [event()], lambda _: output), [event()])
         self.assertEqual(triage(self.cfg, [event()], Mock(side_effect=TimeoutError())), [event()])
 
+    def test_ticket_intake_bypasses_classifier_and_survives_its_failure(self):
+        self.data["triage"]["mode"] = "enforce"
+        intake = event("intake", key="PROJ-9", intake=True)
+        seen = []
+        result = triage(self.cfg, [intake, event()], lambda rows: seen.extend(rows) or {"predictions": [prediction()]})
+        self.assertEqual(result, [intake])
+        self.assertEqual(seen, [event()])
+        only = Mock(side_effect=AssertionError("must not call"))
+        self.assertEqual(triage(self.cfg, [intake], only), [intake])
+        only.assert_not_called()
+        self.assertEqual(triage(self.cfg, [intake, event("2")], Mock(side_effect=TimeoutError())), [intake, event("2")])
+
     def test_whole_batch_validated_before_any_skip(self):
         self.data["triage"]["mode"] = "enforce"
         events = [event(), event("2")]
