@@ -18,6 +18,10 @@ class Config:
             value = self.get(name, 1500 if name.startswith("duplicate") else 10800)
             if type(value) is not int or value < 0:
                 raise ValueError("invalid " + name)
+        for name in ("liveness", "drain"):
+            settings = self.get(name, {})
+            if not isinstance(settings, dict) or type(settings.get("enabled", False)) is not bool:
+                raise ValueError("invalid " + name + " switch")
         triage = self.get("triage", {})
         if triage.get("mode", "shadow") not in ("shadow", "enforce"):
             raise ValueError("invalid triage mode")

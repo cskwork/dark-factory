@@ -16,8 +16,18 @@ class RuntimeRetroTests(Fixture):
         self.data["launcher"].update(list_cmd=["agents", "list"],
                                      archive_cmd=["agents", "archive", "{id}"])
         self.operations = []
+        # Cleanup now requires local end-of-run evidence as well as agent status.
+        ended = self.state / "runs" / "finished-run" / "ended"
+        ended.parent.mkdir(parents=True)
+        ended.touch()
 
     def run_wake(self, agents, *, list_code=0, archive_failure=None, **kwargs):
+        if isinstance(agents, (list, dict)):
+            rows = agents if isinstance(agents, list) else agents.get("agents", [])
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict):
+                        row.setdefault("labels", ["run=finished-run"])
         def command(template, **values):
             argv = self.cfg.command(template, **values)
             self.operations.append(argv)
@@ -75,7 +85,7 @@ class RuntimeRetroTests(Fixture):
     def test_archive_nonzero_exit_is_counted(self):
         def command(template, **values):
             return subprocess.CompletedProcess([], 1 if values else 0,
-                                               json.dumps([{"id": "old", "status": "idle"}]), "")
+                                               json.dumps([{"id": "old", "status": "idle", "labels": ["run=finished-run"]}]), "")
 
         with patch.object(self.cfg, "run", side_effect=command), \
                 patch("factory.runtime.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "new", "")), \

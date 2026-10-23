@@ -14,6 +14,14 @@ launch_timeout_seconds = 60
 worker_timeout_seconds = 5500
 runbook = "templates/RUNBOOK.template.md"
 
+# Owner liveness is opt-in for existing configurations. Both switches can also
+# be disabled by writing off to state_dir/liveness or 0 to state_dir/drain.
+[liveness]
+enabled = true
+
+[drain]
+enabled = true
+
 # TOML insertion order is promotion order. Never infer approval from this order.
 [env_branches]
 dev = "origin/dev"
@@ -24,10 +32,34 @@ prd = "origin/main"
 # Placeholder expansion happens after splitting, preserving spaces in arguments.
 # Literal braces in commands must be doubled: {{ and }}.
 [launcher]
-# Optional: list only this factory's orchestrators; archive finished runs before launch.
-list_cmd = ["paseo", "agent", "ls", "--json", "--label", "factory=example", "--label", "role=orchestrator"]
+# Scope the list to this factory, including workers and archived agents. Choose a
+# distinct factory label for every state directory. Never use status-only cleanup.
+list_cmd = ["paseo", "agent", "ls", "--json", "-a", "--label", "factory=example"]
+inspect_cmd = ["paseo", "agent", "inspect", "{id}", "--json"]
 archive_cmd = ["paseo", "agent", "archive", "{id}"]
+logs_cmd = ["paseo", "agent", "logs", "{id}"]
+run_label_args = ["--label", "run={token}"]
+key_label_args = ["--label", "key={key}"]
+parent_env_keys = ["PASEO_AGENT_ID", "PASEO_WORKSPACE_ID"]
 command = ["paseo", "run", "--provider", "{provider}", "--model", "{model}", "--thinking", "{thinking}", "--mode", "{mode}", "--cwd", "{cwd}", "--label", "factory=example", "--label", "role={role}"]
+
+# Dotted JSON field paths; omit list_field for a raw list or {"agents": [...]}.
+[launcher.fields]
+id = "id"
+status = "status"
+archived = "archived"
+labels = "labels"
+key = "key"
+inspect_status = "Status"
+inspect_archived = "Archived"
+
+# Map external status strings to running, idle, or closed.
+[launcher.status_map]
+running = "running"
+idle = "idle"
+closed = "closed"
+finished = "closed"
+completed = "closed"
 
 [roles.waker]
 provider = "codex"

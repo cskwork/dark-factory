@@ -2,7 +2,7 @@
 
 approvals.json is an object keyed by work key. Each value contains
 decision_id, approved=true, approved_at, note and used_at=null. Consumers set used_at
-after consumption while holding approvals.lock; an approval is scoped to its
+after consumption while holding .state.lock; an approval is scoped to its
 decision_id, never a blanket permission for later work.
 
 decisions/<id>.wake-pending.json remains runnable until the orchestrator reads
@@ -128,7 +128,7 @@ def _approve(cfg, spec, note):
     command = cfg.get("decisions", {}).get("approval", {}).get("on_approve")
     if not command:
         raise DecisionRefused("approval on_approve command is not configured")
-    with _lock(cfg.state_dir / "approvals.lock"):
+    with _lock(cfg.state_dir / ".state.lock"):
         path = cfg.state_dir / "approvals.json"
         approvals = json.loads(path.read_text()) if path.exists() else {}
         existing = approvals.get(spec["key"])
@@ -145,14 +145,14 @@ def _approve(cfg, spec, note):
         if result.returncode:
             raise DecisionRefused(f"approval command exited {result.returncode}")
     except Exception:
-        with _lock(cfg.state_dir / "approvals.lock"):
+        with _lock(cfg.state_dir / ".state.lock"):
             approvals = json.loads(path.read_text())
             approval = approvals.get(spec["key"], {})
             if approval.get("decision_id") == spec["decision_id"]:
                 approval.update(approved=False, action_status="failed")
                 _write(path, approvals)
         raise
-    with _lock(cfg.state_dir / "approvals.lock"):
+    with _lock(cfg.state_dir / ".state.lock"):
         approvals = json.loads(path.read_text())
         approval = approvals.get(spec["key"], {})
         if approval.get("decision_id") != spec["decision_id"]:

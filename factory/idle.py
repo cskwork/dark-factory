@@ -6,7 +6,8 @@ import json
 import subprocess
 import time
 from .config import load_config
-from .state import append_json, read_object, write_json
+from .state import BOOKKEEPING, append_json, item_digest, read_object, transaction, write_json
+from .drain import backoff_active, epoch
 from .triage import triage
 
 
@@ -24,6 +25,27 @@ def normalize(item):
             item.update(needs="", waiting=None)
 
 
+def previous_workers(directory, guard_at):
+    """Only the latest run since the previous guard can justify deferring work."""
+    if not guard_at:
+        return 0
+    candidates = []
+    for path in (directory / "runs").glob("*"):
+        if not path.is_dir():
+            continue
+        summary = read_object(path / "summary.json")
+        started = summary.get("startedAt", summary.get("started_at"))
+        observed = epoch(started) if started is not None else path.stat().st_mtime
+        if observed >= int(epoch(guard_at)):
+            candidates.append((observed, summary))
+    if not candidates:
+        return 0
+    workers = max(candidates, key=lambda row: row[0])[1].get("workers", 0)
+    if type(workers) is not int or workers < 0:
+        raise ValueError("invalid workers count")
+    return workers
+
+
 def notify(cfg, message):
     command = cfg.get("notify", {}).get("cmd")
     if not command:
@@ -36,9 +58,16 @@ def notify(cfg, message):
 
 def decide(cfg, classifier=None):
     result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": []}
+    now = time.time()
     reasons = result["reasons"]
     try:
         cfg.state_dir.mkdir(parents=True, exist_ok=True)
+        from .runtime import blocked_keys
+        blocked = blocked_keys(cfg)
+        result["blockedKeys"] = sorted(blocked)
+        pending = cfg.state_dir / "pending-focus.jsonl"
+        if pending.exists() and pending.read_text().strip():
+            reasons.append("pending-focus")
         # Always use this invocation's stdout; an old empty scan is never evidence.
         (cfg.state_dir / "scan.json").unlink(missing_ok=True)
         response = cfg.run(cfg.get("intake", {})["scan_cmd"])
@@ -49,7 +78,7 @@ def decide(cfg, classifier=None):
             reasons.append("scan-failed")
         if "unauthorized" in (response.stdout + response.stderr).lower():
             reasons.append("scan-unauthorized")
-        if reasons:
+        if "scan-failed" in reasons or "scan-unauthorized" in reasons:
             return result, 1
         scan = json.loads(response.stdout)
         if not isinstance(scan, dict) or not isinstance(scan.get("events"), list) or not isinstance(scan.get("errors"), list):
@@ -65,20 +94,20 @@ def decide(cfg, classifier=None):
             reasons.append("scan-errors")
             return result, 1
         events = triage(cfg, scan["events"], classifier)
+        events = [event for event in events if "*" not in blocked and event["key"] not in blocked]
         write_json(cfg.state_dir / "scan.json", {**scan, "events": events})
         result["events"] = len(events)
         if events:
             reasons.append("new-events")
         queue = read_object(cfg.state_dir / "queue.json")
-        original = content_hash(queue)
+        originals = json.loads(json.dumps(queue))
         for key, item in queue.items():
             if not cfg.valid_key(key) or not isinstance(item, dict):
                 raise ValueError("invalid queue")
             if item.get("waiting") is not None and not isinstance(item["waiting"], str):
                 raise ValueError("invalid waiting")
-            normalize(item)
-        if content_hash(queue) != original:
-            write_json(cfg.state_dir / "queue.json", queue)
+            if "*" not in blocked and key not in blocked and not backoff_active(item, now):
+                normalize(item)
         state = read_object(cfg.state_dir / "guard-state.json")
         previous = state.get("runnable", {})
         if not isinstance(previous, dict):
@@ -87,6 +116,7 @@ def decide(cfg, classifier=None):
             if (not isinstance(row, dict) or not isinstance(row.get("hash"), str)
                     or type(row.get("count")) is not int or row["count"] < 1):
                 raise ValueError("invalid runnable state")
+        workers = previous_workers(cfg.state_dir, state.get("at"))
         notifications = state.get("waitingHuman", {})
         if (not isinstance(notifications, dict) or not isinstance(notifications.get("hashes", []), list)
                 or not all(isinstance(value, str) for value in notifications.get("hashes", []))):
@@ -95,6 +125,12 @@ def decide(cfg, classifier=None):
         for key, item in queue.items():
             waiting = item.get("waiting")
             result["queue"][key] = waiting
+            if backoff_active(item, now):
+                if key in previous:
+                    runnable[key] = previous[key]
+                continue
+            if "*" in blocked or key in blocked:
+                continue
             reason = "queue-runnable:" + key if waiting is None else None
             if waiting in ("env-human", "env-down") and item.get("needs"):
                 from .preflight import check
@@ -118,12 +154,21 @@ def decide(cfg, classifier=None):
                     action = failed.get("human_action") or failed.get("reason") or "environment-unavailable"
                     groups.setdefault(action, []).append(key)
             if reason:
-                digest = content_hash(item)
+                digest = item_digest(item)
                 old = previous.get(key, {})
                 same = old.get("hash") == digest
-                row = {"hash": digest, "count": old.get("count", 0) + 1 if same else 1}
+                defer_count = item.get("deferCount", 0)
+                if type(defer_count) is not int or defer_count < 0:
+                    raise ValueError("invalid defer count")
+                if not same and old and defer_count:
+                    item["deferCount"] = defer_count = 0
+                exempt = (workers >= 1 and bool(state.get("at"))
+                          and item.get("deferredAt") is not None
+                          and epoch(item["deferredAt"]) > epoch(state["at"]) and defer_count < 4)
+                stuck = (same and not exempt) or defer_count >= 4
+                row = {"hash": digest, "count": old.get("count", 0) + 1 if stuck else 1}
                 runnable[key] = row
-                if same:
+                if stuck:
                     result["stuck"].append("stuck-runnable:" + key)
                     if not old.get("reported"):
                         append_json(cfg.state_dir / "lessons.jsonl", {
@@ -137,6 +182,17 @@ def decide(cfg, classifier=None):
                     result.setdefault("stuckNotify", {})[key] = row["notify"]
                 else:
                     reasons.append(reason)
+        changes = {key: (originals[key], item) for key, item in queue.items() if item != originals[key]}
+        if changes:
+            def update_queue(latest):
+                for key, (before, after) in changes.items():
+                    current = latest.get(key)
+                    if not isinstance(current, dict) or item_digest(current) != item_digest(before):
+                        continue
+                    for field, value in after.items():
+                        if before.get(field) != value and current.get(field) == before.get(field):
+                            current[field] = value
+            transaction(cfg.state_dir, "queue.json", update_queue)
         state["runnable"] = runnable
         result["waitingHuman"] = [{"action": action, "keys": sorted(keys)} for action, keys in sorted(groups.items())]
         today = date.today().isoformat()
@@ -150,10 +206,14 @@ def decide(cfg, classifier=None):
             else:
                 result["notify"] = "deduplicated"
         state["waitingHuman"] = {"day": today, "hashes": seen}
-        write_json(cfg.state_dir / "guard-state.json", state)
+        state["at"] = now
+        transaction(cfg.state_dir, "guard-state.json", lambda latest: latest.update(
+            runnable=state["runnable"], waitingHuman=state["waitingHuman"], at=state["at"]))
         for key, approval in read_object(cfg.state_dir / "approvals.json").items():
             if not isinstance(approval, dict):
                 raise ValueError("invalid approval")
+            if "*" in blocked or key in blocked or backoff_active(queue.get(key, {}), now):
+                continue
             if approval.get("approved") is True and not approval.get("used_at"):
                 reasons.append("approval-unused:" + key)
         for path in cfg.state_dir.glob("decisions/*.json"):

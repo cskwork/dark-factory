@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Add configurable run-owner liveness, token ownership, lost-run recovery, key blocking, and ended-only agent archival.
+- Add a 165-minute sequential drain budget, serialized state patches, pending focus, per-item backoff, and progress-aware deferrals.
+- Keep rollback switches for legacy lock timing and single-unit runs; verify with offline command adapters.
+
 ## 0.1.0 - 2026-10-23
 
 - Initial portable harness: guarded agent orchestration, intake triage, deterministic verifiers, human decision pages, and configurable adapters.

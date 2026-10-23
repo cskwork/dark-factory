@@ -86,15 +86,35 @@ commands. `--fail-fast` skips all later probes with status `SKIP`, reason
 fail-fast result per distinct needs set per tick. Output is intentionally sanitized.
 
 Launcher defaults to Paseo run. Role config supplies provider/model/thinking/mode;
-`{role}` is also available for matching launch labels to the list adapter.
-Orchestrator launch adds `--no-wait`, `--title`, and `-q`; success returns a nonempty
-detached run ID. Workers add `--wait-timeout`, `--output-schema PATH`, and the
-brief prompt, then return raw worker-result.schema.json JSON on stdout. A custom
-launcher adapter must accept these flags. Schema-invalid output is failure.
-Optional `launcher.list_cmd` must list only this factory's orchestrators as JSON
-rows (`id`, `status`); `launcher.archive_cmd` accepts `{id}`. Finished runs are
-archived before launching; running ones are skipped. Failure is nonfatal and
-wake reports `archived`/`archive_failed` counts; dry runs do not archive.
+`{role}`, `{token}`, and `{key}` are available to launch templates. Orchestrator
+launch adds `--no-wait`, `--title`, and `-q`; success returns a nonempty detached
+run ID (or a JSON object selected by launcher.launch_id_field, default id).
+Workers add `--wait-timeout`, `--output-schema PATH`, and the brief prompt,
+then return raw worker-result.schema.json JSON. Custom launcher adapters must
+accept these flags. Schema-invalid output is failure. Configure `run_label_args`
+and `key_label_args` to convey ownership; key arguments are omitted for keyless
+units. Configure `parent_env_keys` for daemon parent variables to remove from
+worker launches, so workers survive an orchestrator's failure independently.
+
+`launcher.list_cmd`, `inspect_cmd`, `archive_cmd`, and `logs_cmd` are trusted argv
+templates with `{token}`, `{id}`, and `{key}` substitutions. List all roles,
+including archived agents, within this factory's scope. Give every state directory
+a distinct scope label. A list template containing {token} must filter by that
+token; otherwise every row must carry a matching run label to be considered.
+A list returns raw JSON rows or `{"agents":[...]}`;
+`list_field` selects another dotted collection path. `launcher.fields` maps
+`id`, `status`, `archived`, `labels`, `key`, `inspect_status`, and
+`inspect_archived` to dotted JSON fields. `status_map` maps external values to
+running/idle/closed. Inspection must supply a trustworthy archived flag and
+status; list status alone cannot establish whether an owner was archived.
+The example shows a Paseo mapping; adapters for other launchers follow the same
+contract. Commands never pass through a shell.
+
+Cleanup archives only non-running agents with `run=TOKEN` belonging to
+`state_dir/runs/TOKEN/ended`. Unlabelled legacy agents are left for human review.
+Never archive in bulk by status, including idle; a status-only cleanup caused
+an incident on 2026-10-23. This restriction remains when liveness is off.
+Cleanup failures are reported and do not prevent launch. Dry runs never archive.
 
 ## Intent and clarification
 
@@ -129,30 +149,109 @@ in-progress status once and read the status back.
 
 ## Local state
 
-`running.json` holds started_at/token/mode; `last-wake.json` bounds duplicate
-ticks. Idle runs take no running lock. Only tick checks idle; the first run each
-local day is morning until the orchestrator writes `done-today` (YYYY-MM-DD).
-`queue.json` maps keys to `{stage,waiting,needs,...}`; write needs as a comma string. Missing/null waiting means
-runnable; `env-human`/`env-down` plus needs triggers probes. For environment waits,
-`stage=tobe` without an explicit `nextStep` selects `local`; local steps clear
-remote needs and waiting. The guard atomically persists these normalized values.
-Other waits stay idle. An unchanged runnable content hash on the second tick is
-suppressed as `stuck-runnable:KEY`, with one `infra_fail` lesson and notification;
-changed content is runnable again. Failed launches and dry runs do not consume
-that first runnable attempt.
-`approvals.json` maps keys to `{decision_id,approved:true,used_at:null,...}`; the
-orchestrator stamps used_at after consuming the scoped approval. `state.json`
-preserves unrelated fields and stores handled events under `handled["KEY:ID"]`.
-`scan.json` is the latest successful triaged scan; a failed fresh scan removes it,
-and `idle.json` records the guard's sanitized result. `guard-last.json` includes
-`at`, `reasons`, `queue`, `stuck`, and `waitingHuman`; wake passes `guard_reasons`
-in the prompt. `guard-state.json` stores runnable hashes/counts and notification
-deduplication. `notify.cmd` receives `{message}` as one argument; human waits
-are grouped by the first failed probe's human action (reason as fallback). One
-notification is attempted per distinct group per local day, and once per stuck
-content hash. Failures are recorded as `failed` without changing the decision.
-JSONL files are append-only
-evidence; don't replace another writer's state. Local state must be private.
+`running.json` holds started_at/token/mode and liveness bookkeeping, including
+orchestratorId, noLiveSince, query failures, and the one-time alert marker.
+Updates are atomic. Idle runs take no running lock. Only tick checks idle;
+the first run each local day is morning until `done-today` contains YYYY-MM-DD.
+`last-wake.json` bounds duplicate ticks.
+
+With `[liveness].enabled=true`, `factory-guard --release --token TOKEN` requires
+the current token. Missing tokens fail; mismatched tokens cannot delete the
+lock. `factory-guard --owns TOKEN` exits 0/1 and must precede each unit and queue
+write. A human may use `factory-guard --release --force` only after checking
+surviving agents. No worker owns or releases the lock.
+
+A running token agent keeps the lock. With no running token agents, an archived
+or closed inspected owner is reclaimed immediately; an idle owner requires
+25 minutes continuously without live agents. A missing orchestrator ID has a
+10-minute launch grace period. Query failures keep the lock. Three consecutive
+query failures or age over 6 hours generates one liveness alert and journal entry.
+Reclaim records `lost`, an infra_fail lesson, and journal evidence.
+
+Before retrying a lost run's keys, recover absent result files through logs_cmd
+into `runs/TOKEN/`, then compare against verifier artifacts and patch the actual
+queue stage. Use `bin/factory-guard --config CONFIG --token CURRENT_TOKEN
+--recover LOST_TOKEN` to save logs. An ended worker is not proof of completion.
+After comparing verifier evidence and patching the queue, use
+`bin/factory-guard --config CONFIG --token CURRENT_TOKEN --reconciled LOST_TOKEN`;
+this checks again that no token agent is running before marking ended. A lost token with a running agent
+keeps its keys blocked and does not wake another orchestrator solely to wait.
+Other tokens' unarchived, keyed agents block that key until their token is ended.
+Workers save their results directly under `runs/TOKEN/` as well as stdout;
+stderr is retained beside each result as `KEY-UNIT.stderr.txt` for check-result.
+Use --unit UNIT to give multiple units for one key distinct result paths.
+
+`queue.json` maps keys to `{stage,waiting,needs,...}`; write needs as a comma
+string. Missing/null waiting means runnable; env-human/env-down plus needs
+triggers probes. For `stage=tobe` without nextStep, choose local; local clears
+remote needs and waiting. Guard normalization preserves concurrent item changes.
+Other waits stay idle. Stuck hashes exclude deferredAt, deferReason, deferCount,
+updatedAt, createdAt, backoffUntil, and backoffLevel. Semantic changes reset
+deferCount. An unchanged runnable item is normally suppressed on the second tick
+with an infra_fail lesson and one notification. A deferral after the preceding
+guard is exempt only if that run's summary has workers >= 1; deferCount >= 4
+never qualifies. A zero-work run cannot exempt its deferrals.
+
+`approvals.json` maps keys to `{decision_id,approved:true,used_at:null,...}`.
+Stamp used_at through a state patch after scoped consumption. `state.json`
+preserves unrelated fields and handles events under `handled["KEY:ID"]`.
+All queue/state/approval read-modify-write operations share `.state.lock`, patch
+keys in the latest object, and replace through a temporary file. Workers and
+orchestrators use `python3 -m factory.state --config CONFIG patch FILE --path
+'["KEY"]' --json '{"stage":"build","waiting":null}'`; include `--delete
+'["FIELD"]'` to remove fields. Queue creation supplies createdAt automatically.
+This convention cannot prevent an arbitrary agent from bypassing the command;
+validate queue JSON and required fields after every unit, recording infra_fail
+on corruption. Journal/lessons writes are one append-only line, never rewrites.
+
+`scan.json` is the latest successful triaged scan; failed scans remove it.
+`idle.json` records the sanitized guard result. `guard-last.json` contains at,
+reasons, queue, stuck, and waitingHuman; guard-state.json stores hashes/counts and
+notification deduplication. `notify.cmd` receives one `{message}` argument.
+Human waits are grouped and notified once per distinct group per local day.
+Notification failure is recorded without changing the work decision.
+
+## Sequential drain
+
+Use `python3 -m factory.drain --config CONFIG --token TOKEN COMMAND`:
+
+- `summary-init --runnable N --lane-eligible N`: initialize run measurements.
+- `next-budget [--default-timeout 90m]`: deadline is start + 165 minutes;
+  permit another runtime unit only with >= 30 minutes remaining, and cap timeout
+  at min(default, remaining - 10 minutes). `--units N` supplies completed runtime
+  unit count when no summary is available.
+- `rank [--focus KEY] [--eligible KEY ...]`: unused approval, pending focus,
+  explicit focus, runnable createdAt, first handled event time, then key number.
+  Model-verified environment recovery candidates may be supplied as eligible.
+- `summary-record --key KEY --unit UNIT --started-at EPOCH --ended-at EPOCH
+  --workers N [--runtime]`: record unit timing, worker count, runtime count,
+  runnable and lane-eligible measurements in `runs/TOKEN/summary.json`.
+- `validate-queue`: validate structure and required stage/waiting fields.
+- `defer --key KEY --reason REASON`, `processed --key KEY`, and `rate-limit
+  --key KEY`: persist deferral or successful progress. Repeating a deferral in
+  one run counts once. Success clears backoff and deferral metadata.
+- `check-result --key KEY --result FILE [--stderr FILE]`: rate limit, 429,
+  or overloaded is infrastructure failure and is excluded from model retries.
+
+Refresh intake before every next runtime unit; process new events sequentially
+first. Runtime work never overlaps. Stop at a stage boundary if budget is short.
+Per-item rate limits wait 30, 60, then 120 minutes (capped at 120); exclude only
+that item from runnable/stuck checks until its backoffUntil. New events, pending
+focus, and other items continue to wake the line.
+
+Focused manual wakes blocked by a lock append to pending-focus.jsonl. Decision
+page wakes use the same path and retain their decision markers. Any nonempty
+pending-focus file prevents idle. After actually processing a request, use
+`python3 -m factory.state --config CONFIG consume-pending --lines JSON_LINES`
+with only the snapshot lines handled. Duplicate/concurrent lines are preserved
+by count. Never truncate the entire file.
+
+Rollback writes `off` to state_dir/liveness or sets `[liveness].enabled=false`:
+use legacy lock_stale_seconds (3 hours) and permit tokenless release/worker
+launches, disabling key blocking. Writing `0` to state_dir/drain or setting
+`[drain].enabled=false` allows one runtime unit. Configurations without these
+sections retain legacy lock and single-unit behavior. Ended-only archival,
+serialized state patches, bookkeeping-free hashes, and detached workers remain.
 
 Before stg approval, configure `[migrations]` with `repo`, `glob`, `base`, `head`,
 `sql_config`, `expect_host`, and `default_schema`, and run

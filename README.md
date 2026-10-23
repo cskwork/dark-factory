@@ -47,7 +47,7 @@ flowchart LR
 cp factory.example.toml factory.toml      # set paths, key pattern, branches, roles, adapters
 python3 -m unittest discover -s tests -v  # offline
 bin/factory-guard --manual                # take the lock by hand (prints mode=...)
-bin/factory-guard --release              # the orchestrator uses --release --token <lock_token> from its prompt
+bin/factory-guard --release --token TOKEN # use the lock_token from the orchestrator prompt
 bin/factory-wake --now --key PROJ-123     # manual run, ignores the duplicate window and idle gate, keeps the lock
 ```
 
@@ -61,7 +61,7 @@ Schedule `bin/factory-wake` every 30 minutes with any scheduler. With Paseo, a c
 - **Preflight** (`preflight.probes`): probes declare `requires` prerequisites; failed prerequisites skip dependent commands. `--fail-fast` marks remaining probes `SKIP`. Idle caches each needs set per tick.
 - **Notifications** (`notify.cmd`): optional argv command with `{message}`. Human waits are grouped and notified once per distinct group per day; failures are recorded without blocking.
 - **Migrations** (`migrations`): configure repository, migration glob, base/head refs, SQL config, schema, and expected host. `check_migrations` reads schema metadata through the DB connector; nonzero results block approval creation when configured. Unsupported SQL requires human review.
-- **Launcher** (`launcher`): command template that starts an agent with provider/model/thinking/mode and, for workers, returns JSON matching `schemas/worker-result.schema.json`. Optional `list_cmd`/`archive_cmd` archive finished orchestrators before launch, skipping running ones; wake reports success/failure counts.
+- **Launcher** (`launcher`): command template that starts an agent with provider/model/thinking/mode and, for workers, returns JSON matching `schemas/worker-result.schema.json`. `list_cmd`, `inspect_cmd`, `archive_cmd`, and `logs_cmd` use `{token}`, `{id}`, and `{key}` substitutions and configurable JSON field/status mappings. Scope the list to one factory state directory, including all worker roles. Cleanup archives only non-running agents belonging to a locally `ended` run token; wake reports success/failure counts.
 
 ## Human decisions
 
@@ -74,15 +74,21 @@ Every human decision is a local page opened in the browser with a one-time token
 - Completion needs verifier output, not a model's say-so. A verifier that fails blocks "done".
 - Merge conflicts: resolve against the target branch's version and re-apply only the ticket's lines; never take a whole file with `--ours`/`--theirs`. A separate reviewer approves; two rejections or a semantic conflict go to a human.
 - The guard persists normalized `nextStep`/`needs`/`waiting` and `guard-last.json`; wake passes its reasons to the orchestrator. An unchanged runnable item on the second tick is suppressed with a lesson and one notification in `guard-state.json`; changed content resumes it.
-- One run at a time: the lock is taken by the guard and released by the orchestrator. A lock older than `lock_stale_seconds` (default 3 h) is treated as abandoned, so a crashed run blocks the line for at most that long. An old orchestrator cannot release a newer run's lock.
+- One run at a time: with `[liveness].enabled=true`, release and worker launches require the current token. A closed or archived owner is reclaimed immediately only when no token agent is running. An idle owner requires **25 minutes** without running agents; a missing launch ID has a **10-minute** grace period. Query failures keep the lock; **3 consecutive failures** or a lock age of **6 hours** trigger one alert. Lost runs require result/log reconciliation before their keys are reused.
+- Sequential drain: `[drain].enabled=true` allows another unit when at least **30 minutes** remain before `started_at + 165 minutes`. Worker timeouts reserve **10 minutes** for reporting. Refresh intake before each unit and handle new events first. Runtime work stays sequential.
+- Rollback: write `off` to `state_dir/liveness` for the legacy **3-hour** epoch lock and tokenless release, or `0` to `state_dir/drain` for one runtime unit. The corresponding config switches also disable these features. Ended-only archival, serialized state writes, and bookkeeping-free stuck hashes remain active.
 
 ## Getting better on its own
 
 Worker failures, verifier failures, review rejections, new human waits, and reviewers' non-blocking notes are appended to `lessons.jsonl`. A weekly retro (template in `templates/RETRO.template.md`) groups repeats, prefers a new verifier over a new rule, and pushes a `retro/YYYYMMDD` branch with tests. It never merges or changes its own authority.
 
-## 한국어 요약
+## State and drain operations
 
-티켓 중심 개발 라인을 에이전트로 돌리는 이식형 하네스입니다. 판정은 싼 순서로 합니다. 먼저 스크립트(가드)가 할 일이 있는지 보고, 없으면 바로 끝냅니다. 할 일이 있을 때만 비싼 오케스트레이터가 깨어나는데, 오케스트레이터는 지시와 보고만 하고 실제 작업은 작업자 에이전트가 합니다. 완료 여부는 결정적 검증기(exit 코드)가 판정합니다. 사람의 결정은 브라우저 버튼 한 번으로 받습니다(stg 승인, 비운영 DB 데이터 보정 SQL 실행(스키마 변경은 마이그레이션 도구로), 선택형 판단). 실패와 지적은 `lessons.jsonl`에 쌓이고, 주간 회고가 개선안을 브랜치로 제안합니다. 병합은 사람이 합니다.
+Use `python3 -m factory.state --config CONFIG patch queue.json --path '["PROJ-123"]' --json '{"stage":"build","waiting":null}'` for key-level updates. The same command updates `state.json` and `approvals.json`, preserving other keys under `.state.lock`. Do not read and rewrite entire shared objects in a worker. JSONL evidence is append-only.
+
+The orchestrator uses `python3 -m factory.drain --config CONFIG --token TOKEN` for budget, ranking, summaries, deferrals, and per-item rate-limit backoff. The [runbook](templates/RUNBOOK.template.md) specifies the full loop and recovery procedure. Deferred items avoid the stuck backstop only when the previous run did useful worker work; **4 consecutive deferrals** still count as stuck. Rate limits back off only that item for **30, 60, then 120 minutes**, capped at **120 minutes**. New events and pending focus still wake the line.
+
+Manual focused wakes blocked by an existing lock persist in `pending-focus.jsonl`. Consume only the lines actually handled, through the state command, so concurrent requests survive.
 
 ## License
 
