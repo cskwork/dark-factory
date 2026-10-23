@@ -274,7 +274,10 @@ def guard(cfg, manual=False, release=False, token=None, force=False):
             _clear_lock(cfg)
             if current and valid_token(current.get("token")):
                 try:
-                    ended = not has_running(agents(cfg, current["token"]))
+                    # The releasing orchestrator is still running; only workers decide ended.
+                    owner = current.get("orchestratorId")
+                    ended = not has_running([row for row in agents(cfg, current["token"])
+                                             if row.get("id") != owner])
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
                     ended = False
                 mark_run(cfg, current["token"], "ended" if ended else "lost")

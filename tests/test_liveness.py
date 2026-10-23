@@ -58,6 +58,13 @@ class LivenessTests(Fixture):
         self.assertFalse((self.state / "running.json").exists())
         self.assertTrue((self.state / "runs/old/ended").exists())
 
+    def test_release_by_running_owner_marks_ended(self):
+        self.running()
+        self.rows = [{"id": "owner", "status": "running"}, {"id": "worker", "status": "idle", "key": "PROJ-123"}]
+        guard(self.cfg, release=True, token="old")
+        self.assertTrue((self.state / "runs/old/ended").exists())
+        self.assertFalse((self.state / "runs/old/lost").exists())
+
     def test_release_with_running_worker_marks_lost(self):
         self.running()
         self.rows = [{"id": "worker", "status": "running", "key": "PROJ-123"}]
