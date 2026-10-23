@@ -1,14 +1,41 @@
 """Exit 0 only for established idle, 1 for work, 2 for invalid state or errors."""
 import argparse
+from datetime import date
+import hashlib
 import json
 import subprocess
+import time
 from .config import load_config
-from .state import read_object, write_json
+from .state import append_json, read_object, write_json
 from .triage import triage
 
 
+def content_hash(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def normalize(item):
+    """Local verification has no remote prerequisites; persist that decision."""
+    if item.get("waiting") in ("env-human", "env-down"):
+        step = item.get("nextStep") or ("local" if item.get("stage") == "tobe" else None)
+        if step:
+            item["nextStep"] = step
+        if step == "local":
+            item.update(needs="", waiting=None)
+
+
+def notify(cfg, message):
+    command = cfg.get("notify", {}).get("cmd")
+    if not command:
+        return "disabled"
+    try:
+        return "sent" if cfg.run(command, message=message).returncode == 0 else "failed"
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return "failed"
+
+
 def decide(cfg, classifier=None):
-    result = {"idle": False, "reasons": [], "events": 0, "queue": {}}
+    result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": []}
     reasons = result["reasons"]
     try:
         cfg.state_dir.mkdir(parents=True, exist_ok=True)
@@ -16,9 +43,14 @@ def decide(cfg, classifier=None):
         (cfg.state_dir / "scan.json").unlink(missing_ok=True)
         response = cfg.run(cfg.get("intake", {})["scan_cmd"])
         if response.returncode:
+            time.sleep(3)
+            response = cfg.run(cfg.get("intake", {})["scan_cmd"])
+        if response.returncode:
             reasons.append("scan-failed")
         if "unauthorized" in (response.stdout + response.stderr).lower():
             reasons.append("scan-unauthorized")
+        if reasons:
+            return result, 1
         scan = json.loads(response.stdout)
         if not isinstance(scan, dict) or not isinstance(scan.get("events"), list) or not isinstance(scan.get("errors"), list):
             raise ValueError("invalid scan")
@@ -31,34 +63,94 @@ def decide(cfg, classifier=None):
                 raise ValueError("invalid event")
         if scan["errors"]:
             reasons.append("scan-errors")
-        if reasons:
             return result, 1
         events = triage(cfg, scan["events"], classifier)
         write_json(cfg.state_dir / "scan.json", {**scan, "events": events})
         result["events"] = len(events)
         if events:
             reasons.append("new-events")
-        for key, item in read_object(cfg.state_dir / "queue.json").items():
+        queue = read_object(cfg.state_dir / "queue.json")
+        original = content_hash(queue)
+        for key, item in queue.items():
             if not cfg.valid_key(key) or not isinstance(item, dict):
                 raise ValueError("invalid queue")
-            waiting = item.get("waiting")
-            if waiting is not None and not isinstance(waiting, str):
+            if item.get("waiting") is not None and not isinstance(item["waiting"], str):
                 raise ValueError("invalid waiting")
+            normalize(item)
+        if content_hash(queue) != original:
+            write_json(cfg.state_dir / "queue.json", queue)
+        state = read_object(cfg.state_dir / "guard-state.json")
+        previous = state.get("runnable", {})
+        if not isinstance(previous, dict):
+            raise ValueError("invalid guard state")
+        for row in previous.values():
+            if (not isinstance(row, dict) or not isinstance(row.get("hash"), str)
+                    or type(row.get("count")) is not int or row["count"] < 1):
+                raise ValueError("invalid runnable state")
+        notifications = state.get("waitingHuman", {})
+        if (not isinstance(notifications, dict) or not isinstance(notifications.get("hashes", []), list)
+                or not all(isinstance(value, str) for value in notifications.get("hashes", []))):
+            raise ValueError("invalid notification state")
+        runnable, cache, groups = {}, {}, {}
+        for key, item in queue.items():
+            waiting = item.get("waiting")
             result["queue"][key] = waiting
-            if waiting is None:
-                reasons.append("queue-runnable:" + key)
+            reason = "queue-runnable:" + key if waiting is None else None
             if waiting in ("env-human", "env-down") and item.get("needs"):
                 from .preflight import check
                 needs = item["needs"]
                 if isinstance(needs, str):
                     needs = needs.split(",")
-                if not isinstance(needs, list) or not all(isinstance(n, str) for n in needs):
+                if not isinstance(needs, list) or not all(isinstance(n, str) and n.strip() for n in needs):
                     raise ValueError("invalid probe needs")
-                probe, code = check(cfg, needs)
+                names = list(dict.fromkeys(n.strip() for n in needs))
+                signature = tuple(sorted(names))
+                if signature not in cache:
+                    cache[signature] = check(cfg, names, fail_fast=True)
+                probe, code = cache[signature]
                 if code == 0:
-                    reasons.append("environment-ready:" + key)
+                    reason = "environment-ready:" + key
                 elif code not in (10, 20):
                     raise ValueError("invalid probe result")
+                elif waiting == "env-human":
+                    failed = next((row for row in probe.get("results", [])
+                                   if row.get("status") in ("HUMAN", "DOWN")), {})
+                    action = failed.get("human_action") or failed.get("reason") or "environment-unavailable"
+                    groups.setdefault(action, []).append(key)
+            if reason:
+                digest = content_hash(item)
+                old = previous.get(key, {})
+                same = old.get("hash") == digest
+                row = {"hash": digest, "count": old.get("count", 0) + 1 if same else 1}
+                runnable[key] = row
+                if same:
+                    result["stuck"].append("stuck-runnable:" + key)
+                    if not old.get("reported"):
+                        append_json(cfg.state_dir / "lessons.jsonl", {
+                            "at": time.time(), "key": key, "kind": "infra_fail",
+                            "observation": "Runnable item unchanged after orchestrator wake",
+                            "evidence": digest, "proposal": "Execute nextStep or update needs/waiting"})
+                        row["notify"] = notify(cfg, "Stuck runnable: " + key)
+                    else:
+                        row["notify"] = old.get("notify", "disabled")
+                    row["reported"] = True
+                    result.setdefault("stuckNotify", {})[key] = row["notify"]
+                else:
+                    reasons.append(reason)
+        state["runnable"] = runnable
+        result["waitingHuman"] = [{"action": action, "keys": sorted(keys)} for action, keys in sorted(groups.items())]
+        today = date.today().isoformat()
+        seen = notifications.get("hashes", []) if notifications.get("day") == today else []
+        if result["waitingHuman"]:
+            digest = content_hash(result["waitingHuman"])
+            if digest not in seen:
+                message = "\n".join(row["action"] + ": " + ", ".join(row["keys"]) for row in result["waitingHuman"])
+                result["notify"] = notify(cfg, message)
+                seen.append(digest)
+            else:
+                result["notify"] = "deduplicated"
+        state["waitingHuman"] = {"day": today, "hashes": seen}
+        write_json(cfg.state_dir / "guard-state.json", state)
         for key, approval in read_object(cfg.state_dir / "approvals.json").items():
             if not isinstance(approval, dict):
                 raise ValueError("invalid approval")
@@ -74,6 +166,8 @@ def decide(cfg, classifier=None):
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         reasons.append("internal-error")
         return result, 2
+    finally:
+        write_json(cfg.state_dir / "guard-last.json", {"at": time.time(), **result})
 
 
 def main(argv=None):

@@ -24,7 +24,10 @@ prd = "origin/main"
 # Placeholder expansion happens after splitting, preserving spaces in arguments.
 # Literal braces in commands must be doubled: {{ and }}.
 [launcher]
-command = ["paseo", "run", "--provider", "{provider}", "--model", "{model}", "--thinking", "{thinking}", "--mode", "{mode}", "--cwd", "{cwd}"]
+# Optional: list only this factory's orchestrators; archive finished runs before launch.
+list_cmd = ["paseo", "agent", "ls", "--json", "--label", "factory=example", "--label", "role=orchestrator"]
+archive_cmd = ["paseo", "agent", "archive", "{id}"]
+command = ["paseo", "run", "--provider", "{provider}", "--model", "{model}", "--thinking", "{thinking}", "--mode", "{mode}", "--cwd", "{cwd}", "--label", "factory=example", "--label", "role={role}"]
 
 [roles.waker]
 provider = "codex"
@@ -54,6 +57,10 @@ mode = "read-only"
 # Adapter prints exactly one JSON object to stdout; see the runbook contract.
 scan_cmd = ["python3", "adapters/intake.py"]
 
+[notify]
+# Optional trusted argv adapter. Empty disables notifications; no shell is used.
+cmd = [] # e.g. ["python3", "adapters/notify.py", "{message}"]
+
 [triage]
 mode = "shadow"
 classifier_cmd = [] # Optional adapter reads {events:[...]} on stdin, returns predictions.
@@ -69,7 +76,13 @@ commit = "commit"
 
 # Each probe exits 0 ready, a configured human exit code for human action,
 # otherwise unavailable. Probe stdout/stderr is never copied to verifier JSON.
+[preflight.probes.network]
+cmd = ["python3", "adapters/probe.py", "network"]
+human_exit_codes = [10]
+human_action = "Connect the required network"
+
 [preflight.probes.service]
+requires = ["network"]
 cmd = ["python3", "adapters/probe.py", "service"]
 human_exit_codes = [10]
 
@@ -86,3 +99,13 @@ host_query = "SELECT @@hostname"
 [decisions.sql.configs.sandbox]
 # Connector-specific connect(**kwargs); keep credentials outside version control.
 database = "sandbox"
+
+# Read-only verification before approval creation; no migration DDL is executed.
+[migrations]
+repo = "services/example"
+glob = "docs/db/migration/*.sql"
+base = "origin/stg"
+head = "HEAD"
+sql_config = "sandbox"
+expect_host = "sandbox-"
+default_schema = "sandbox"

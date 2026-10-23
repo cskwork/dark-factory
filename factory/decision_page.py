@@ -106,6 +106,13 @@ def create_request(cfg, spec: dict) -> dict:
         spec["sql_sha256"] = hashlib.sha256(snapshot).hexdigest()
         sql_runner._validate(spec["sql_text"])
         sql_runner._validate(spec["guard_sql"], guard=True)
+    if spec["kind"] == "approval" and cfg.get("migrations") is not None:
+        from .check_migrations import check
+        report, code = check(cfg, repo=spec.get("migration_repo"),
+                             base=spec.get("migration_base"), head=spec.get("migration_head"))
+        if code != 0:
+            raise DecisionRefused("migration verification failed; waiting=human-risk; no approval page")
+        spec["migration_check"] = report
     spec["decision_id"] = secrets.token_hex(16)
     spec["token"] = secrets.token_urlsafe(32)
     spec["created_at"] = _stamp()

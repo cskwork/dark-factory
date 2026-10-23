@@ -31,7 +31,7 @@ class IdleTests(Fixture):
         for code in (0, 10, 20, 2):
             with self.subTest(code=code), patch("factory.preflight.check", return_value=({}, code)) as probe:
                 self.assertEqual(decide(self.cfg)[1], {0: 1, 10: 0, 20: 0, 2: 2}[code])
-                probe.assert_called_once_with(self.cfg, ["db", "service"])
+                probe.assert_called_once_with(self.cfg, ["db", "service"], fail_fast=True)
 
     def test_failure_never_reuses_old_empty_scan(self):
         self.write("scan.json", {"events": [], "errors": []})

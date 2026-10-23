@@ -33,7 +33,7 @@ Verify isolated branch contents with `python3 -m factory.check_base --config CON
 --repo REPO --branch BRANCH --key PROJ-123`. Historical base ancestors may lag;
 foreign commits and merge commits fail. An explicitly approved extra key uses
 `--also-key`. Inspect environment readiness with `python3 -m factory.preflight
---config CONFIG --need service`. Verify completed deployment using
+--config CONFIG --need service --fail-fast`. Verify completed deployment using
 `python3 -m factory.check_deploy --config CONFIG --repo REPO --job JOB --build 42
 --context dev --expect SHA`. Local refs are used; adapters must refresh refs when
 authorized and record freshness. These checks do not establish runtime health.
@@ -50,7 +50,9 @@ The adapter selects relevant mentions/assigned events and determines whether a
 later reply by the configured identity answered each event. IDs are nonempty
 strings, unique per key. Booleans are required; errors is an array. Auth failures,
 nonzero exits, malformed JSON, and invalid state keep work runnable. A fresh scan
-always supersedes old output. stdout is JSON only; diagnostics go to stderr.
+always supersedes old output. A nonzero `scan_cmd` exit is retried once after
+3 seconds; a second failure remains `scan-failed`. stdout is JSON only;
+diagnostics go to stderr.
 
 Comments are not the only work. The adapter should also emit one ticket-level
 event per owned ticket that has not started (for example backlog or to-do
@@ -77,13 +79,22 @@ Timeouts, malformed/incomplete batches, and log errors fail open to workers.
 Map dotted paths with `ci.fields`: status must indicate completion, result must
 be SUCCESS, and commit must contain the expected commit in Git. Preflight probes
 are trusted argv commands: exit 0 ready, configured human codes require action,
-other failures mean unavailable. Output is intentionally sanitized.
+other failures mean unavailable. A probe's `requires` list names prerequisite
+probes, included automatically and run first; failed prerequisites skip dependent
+commands. `--fail-fast` skips all later probes with status `SKIP`, reason
+`fail-fast`; HUMAN (10) and DOWN (20) retain their exit codes. Idle caches one
+fail-fast result per distinct needs set per tick. Output is intentionally sanitized.
 
-Launcher defaults to Paseo run. Role config supplies provider/model/thinking/mode.
+Launcher defaults to Paseo run. Role config supplies provider/model/thinking/mode;
+`{role}` is also available for matching launch labels to the list adapter.
 Orchestrator launch adds `--no-wait`, `--title`, and `-q`; success returns a nonempty
 detached run ID. Workers add `--wait-timeout`, `--output-schema PATH`, and the
 brief prompt, then return raw worker-result.schema.json JSON on stdout. A custom
 launcher adapter must accept these flags. Schema-invalid output is failure.
+Optional `launcher.list_cmd` must list only this factory's orchestrators as JSON
+rows (`id`, `status`); `launcher.archive_cmd` accepts `{id}`. Finished runs are
+archived before launching; running ones are skipped. Failure is nonfatal and
+wake reports `archived`/`archive_failed` counts; dry runs do not archive.
 
 ## Intent and clarification
 
@@ -122,13 +133,41 @@ in-progress status once and read the status back.
 ticks. Idle runs take no running lock. Only tick checks idle; the first run each
 local day is morning until the orchestrator writes `done-today` (YYYY-MM-DD).
 `queue.json` maps keys to `{stage,waiting,needs,...}`; write needs as a comma string. Missing/null waiting means
-runnable; `env-human`/`env-down` plus needs triggers probes. Other waits stay idle.
+runnable; `env-human`/`env-down` plus needs triggers probes. For environment waits,
+`stage=tobe` without an explicit `nextStep` selects `local`; local steps clear
+remote needs and waiting. The guard atomically persists these normalized values.
+Other waits stay idle. An unchanged runnable content hash on the second tick is
+suppressed as `stuck-runnable:KEY`, with one `infra_fail` lesson and notification;
+changed content is runnable again. Failed launches and dry runs do not consume
+that first runnable attempt.
 `approvals.json` maps keys to `{decision_id,approved:true,used_at:null,...}`; the
 orchestrator stamps used_at after consuming the scoped approval. `state.json`
 preserves unrelated fields and stores handled events under `handled["KEY:ID"]`.
 `scan.json` is the latest successful triaged scan; a failed fresh scan removes it,
-and `idle.json` records the guard's sanitized result. JSONL files are append-only
+and `idle.json` records the guard's sanitized result. `guard-last.json` includes
+`at`, `reasons`, `queue`, `stuck`, and `waitingHuman`; wake passes `guard_reasons`
+in the prompt. `guard-state.json` stores runnable hashes/counts and notification
+deduplication. `notify.cmd` receives `{message}` as one argument; human waits
+are grouped by the first failed probe's human action (reason as fallback). One
+notification is attempted per distinct group per local day, and once per stuck
+content hash. Failures are recorded as `failed` without changing the decision.
+JSONL files are append-only
 evidence; don't replace another writer's state. Local state must be private.
+
+Before stg approval, configure `[migrations]` with `repo`, `glob`, `base`, `head`,
+`sql_config`, `expect_host`, and `default_schema`, and run
+`python3 -m factory.check_migrations --config CONFIG`. It reads changed SQL from
+local refs and checks CREATE TABLE / ALTER TABLE ADD against information_schema
+through the configured SQL connector and host policy, without executing DDL.
+This proves object existence only, not types, constraints, indexes, or backfills.
+The schema defaults to the selected connector's database when not explicit.
+Exit codes: 0 applied or none, 1 missing, 3 unsupported SQL requiring review,
+10 environment/DB failure. Any nonzero result stops stg preparation with
+`waiting=human-risk`; do not create an approval page. When `[migrations]` is
+configured, approval creation rechecks the verifier before persisting a request.
+Set the configured refs to the exact prepared promotion scope. Trusted approval
+`--spec` fields `migration_repo`, `migration_base`, and `migration_head` may
+override that scope; the passing verifier JSON is saved in the request.
 
 Create a detached decision page with one of these commands; `--open` also opens
 the URL in the default browser. The server exits after a decision or timeout.

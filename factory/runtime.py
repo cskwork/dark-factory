@@ -31,14 +31,19 @@ def guard(cfg, manual=False, release=False, token=None):
             return "factory-guard: released", None
         now = time.time()
         if current and now - current["started_at"] < cfg.get("lock_stale_seconds", 10800):
+            write_json(cfg.state_dir / "guard-last.json", {"at": now, "reasons": ["duplicate-running"], "queue": {}})
             return "factory-guard: skipping duplicate (running)", None
         last = read_object(cfg.state_dir / "last-wake.json")
         if not manual and last and now - last["at"] < cfg.get("duplicate_window_seconds", 1500):
+            write_json(cfg.state_dir / "guard-last.json", {"at": now, "reasons": ["duplicate-window"], "queue": {}})
             return "factory-guard: skipping duplicate (window)", None
         today = cfg.state_dir / "done-today"
         mode = "tick" if today.exists() and today.read_text().strip() == date.today().isoformat() else "morning"
+        decision = {"at": now, "reasons": ["manual" if manual else "morning"], "queue": {}}
         if not manual and mode == "tick":
             result, code = decide(cfg)
+            decision.update(result)
+            write_json(cfg.state_dir / "guard-last.json", decision)
             write_json(cfg.state_dir / "idle.json", result)
             if code == 0:
                 try:
@@ -47,7 +52,10 @@ def guard(cfg, manual=False, release=False, token=None):
                     return "factory-guard: skipping duplicate (idle: events=0, no runnable work)", None
                 except OSError:
                     pass  # A failed evidence write cannot establish a safe idle skip.
-        run = {"started_at": now, "token": uuid.uuid4().hex, "mode": mode}
+        else:
+            write_json(cfg.state_dir / "guard-last.json", decision)
+        # Keep this invocation's reasons even if another guard subsequently skips.
+        run = {"started_at": now, "token": uuid.uuid4().hex, "mode": mode, "reasons": decision["reasons"]}
         try:
             write_json(running, run)
             if not manual:
@@ -68,6 +76,17 @@ def release_run(cfg, run, retry=False):
             last = read_object(cfg.state_dir / "last-wake.json")
             if last.get("token") == run["token"]:
                 (cfg.state_dir / "last-wake.json").unlink(missing_ok=True)
+            # Failed launches and dry runs have not given these items a worker.
+            # Do not let their next genuine launch trip the stuck backstop.
+            if not read_object(cfg.state_dir / "running.json"):
+                state = read_object(cfg.state_dir / "guard-state.json")
+                runnable = state.get("runnable", {})
+                for reason in run.get("reasons", []):
+                    prefix, _, key = reason.partition(":")
+                    if prefix in ("queue-runnable", "environment-ready"):
+                        runnable.pop(key, None)
+                if state:
+                    write_json(cfg.state_dir / "guard-state.json", state)
 
 
 def launcher(cfg, role):
@@ -80,7 +99,55 @@ def launcher(cfg, role):
                                               for k in ("provider", "model", "thinking", "mode")):
         raise ValueError("unknown or invalid role")
     template = cfg.get("launcher", {}).get("command", DEFAULT_LAUNCHER)
-    return cfg.command(template, **mapping)
+    return cfg.command(template, **{**mapping, "role": role})
+
+
+def archive_finished(cfg):
+    """The list adapter scopes to this factory's orchestrators; never infer scope."""
+    settings = cfg.get("launcher", {})
+    list_cmd, archive_cmd = settings.get("list_cmd"), settings.get("archive_cmd")
+    if list_cmd is None and archive_cmd is None:
+        return 0, 0
+    try:
+        # A command without an ID substitution could archive agents outside the list.
+        template = shlex.split(archive_cmd) if isinstance(archive_cmd, str) else archive_cmd
+        if not isinstance(template, list) or not any(isinstance(p, str) and "{id}" in p for p in template):
+            raise ValueError("archive_cmd requires {id}")
+        cfg.command(archive_cmd, id="validate")
+        response = cfg.run(list_cmd)
+        if response.returncode:
+            return 0, 1
+        agents = json.loads(response.stdout)
+        if isinstance(agents, dict):
+            agents = agents.get("agents")
+        if not isinstance(agents, list):
+            raise ValueError("invalid agent list")
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        return 0, 1
+    archived = failed = 0
+    seen = set()
+    for agent in agents:
+        if not isinstance(agent, dict):
+            failed += 1
+            continue
+        if agent.get("status") not in ("idle", "finished", "completed"):
+            continue
+        identity = agent.get("id")
+        if not isinstance(identity, str) or not identity:
+            failed += 1
+            continue
+        if identity in seen:
+            continue
+        seen.add(identity)
+        try:
+            response = cfg.run(archive_cmd, id=identity)
+            if response.returncode:
+                failed += 1
+            else:
+                archived += 1
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+            failed += 1
+    return archived, failed
 
 
 def wake(cfg, manual=False, key=None, dry_run=False):
@@ -91,8 +158,10 @@ def wake(cfg, manual=False, key=None, dry_run=False):
     try:
         runbook = cfg.resolve(cfg.get("runbook", "templates/RUNBOOK.template.md"), cfg.path.parent)
         prompt = (f"You are the factory orchestrator. mode={run['mode']} trigger={'manual' if manual else 'tick'} "
-                  f"focus={key or 'all'} config={cfg.path} lock_token={run['token']}. "
+                  f"focus={key or 'all'} config={cfg.path} lock_token={run['token']} "
+                  f"guard_reasons={','.join(run['reasons'])}. "
                   f"Read {ROOT / 'templates/ORCHESTRATOR.template.md'} and runbook {runbook}. "
+                  f"Read guard decision {cfg.state_dir / 'guard-last.json'}. "
                   "Inspect idle.json; refresh intake if scan.json is absent or the scan failed. "
                   "Decide units, delegate, inspect verifier JSON, report, and release your lock in all outcomes.")
         command = launcher(cfg, "orchestrator") + ["--no-wait", "--title", "Factory orchestrator", "-q", prompt]
@@ -100,6 +169,8 @@ def wake(cfg, manual=False, key=None, dry_run=False):
             print("dry-run: " + shlex.join(command))
             release_run(cfg, run, retry=True)
             return 0
+        archived, archive_failed = archive_finished(cfg)
+        print(f"factory-wake: archived={archived} archive_failed={archive_failed}")
         # The launcher must return a detached run identifier, not wait for the model.
         response = subprocess.run(command, cwd=cfg.project_root, stdin=subprocess.DEVNULL,
                                   capture_output=True, text=True, timeout=cfg.get("launch_timeout_seconds", 60))
