@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dark-factory — portable agent software-factory harness</title>
+<meta name="description" content="A portable harness that runs a ticket-driven software line with agents: cheap waker, minimal orchestrator, verifier-judged done, one-click human decisions.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1020'/%3E%3Cpath d='M7 24V13l6 4v-4l6 4v-4l6 4v7z' fill='%237dd3fc'/%3E%3C/svg%3E">
+<style>
+:root{
+  --bg:#070b16; --ink:#e8eefc; --muted:#a9b6d3; --line:rgba(255,255,255,.12);
+  --glass:rgba(16,24,44,.62); --glass-strong:rgba(14,20,38,.82);
+  --a1:#7dd3fc; --a2:#a78bfa; --a3:#34d399; --warn:#fbbf24;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;color:var(--ink);background:var(--bg);
+  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Segoe UI","Noto Sans KR",sans-serif;
+  word-break:keep-all;overflow-wrap:anywhere}
+body::before{content:"";position:fixed;inset:-20vmax;z-index:-1;
+  background:
+    radial-gradient(40vmax 40vmax at 15% 10%,rgba(125,211,252,.22),transparent 60%),
+    radial-gradient(45vmax 45vmax at 90% 20%,rgba(167,139,250,.20),transparent 60%),
+    radial-gradient(40vmax 40vmax at 50% 100%,rgba(52,211,153,.14),transparent 60%)}
+a{color:var(--a1)}
+code{font-family:var(--mono);font-size:.88em;background:rgba(255,255,255,.08);padding:.1em .35em;border-radius:5px}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+.glass{background:var(--glass);border:1px solid var(--line);border-radius:18px;
+  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
+  box-shadow:0 10px 40px rgba(0,0,0,.35)}
+nav{position:sticky;top:0;z-index:10;background:rgba(7,11,22,.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:18px;height:58px}
+.brand{font-weight:700;letter-spacing:.2px;color:var(--ink);text-decoration:none;display:flex;gap:9px;align-items:center}
+.links{display:flex;gap:16px;margin-left:auto;font-size:.92rem}
+.links a{color:var(--muted);text-decoration:none}
+.links a:hover{color:var(--ink)}
+.lang{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.lang button{all:unset;cursor:pointer;padding:4px 12px;font-size:.82rem;color:var(--muted)}
+.lang button[aria-pressed="true"]{background:var(--a1);color:#04121c;font-weight:700}
+.lang button:focus-visible{outline:2px solid var(--a2)}
+header.hero{padding:84px 0 40px;text-align:center}
+.eyebrow{display:inline-block;font-size:.8rem;color:var(--a1);border:1px solid rgba(125,211,252,.35);padding:4px 12px;border-radius:999px;margin-bottom:18px}
+h1{font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.15;margin:0 0 18px;letter-spacing:-.5px}
+h1 .grad{background:linear-gradient(90deg,var(--a1),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent}
+.lead{max-width:760px;margin:0 auto 26px;color:var(--muted);font-size:1.08rem}
+.motto{max-width:820px;margin:0 auto 30px;padding:16px 22px;font-weight:600;background:var(--glass-strong)}
+.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
+.btn{display:inline-block;padding:11px 20px;border-radius:12px;text-decoration:none;font-weight:600;border:1px solid var(--line);color:var(--ink);background:rgba(255,255,255,.06)}
+.btn.primary{background:linear-gradient(90deg,var(--a1),var(--a2));color:#08101f;border:0}
+section{padding:46px 0}
+h2{font-size:1.7rem;margin:0 0 8px}
+.sub{color:var(--muted);margin:0 0 26px}
+.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.card{padding:22px}
+.card h3{margin:0 0 8px;font-size:1.08rem}
+.card p{margin:0;color:var(--muted);font-size:.95rem}
+.tag{font-family:var(--mono);font-size:.75rem;color:var(--a3);margin-bottom:8px;display:block}
+table{width:100%;border-collapse:collapse;font-size:.93rem}
+th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{color:var(--a1);font-weight:600;background:rgba(255,255,255,.03)}
+td:first-child{font-weight:600;width:42%} td:nth-child(2){width:24%}
+.tbl{overflow-x:auto;padding:6px}
+.flow{padding:26px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;font-size:.9rem}
+.node{padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:var(--glass-strong);text-align:center}
+.node small{display:block;color:var(--muted);font-size:.76rem}
+.node.cheap{border-color:rgba(52,211,153,.5)} .node.exp{border-color:rgba(167,139,250,.55)} .node.human{border-color:rgba(251,191,36,.55)}
+.arrow{color:var(--muted)}
+pre{margin:0;padding:20px;overflow-x:auto;font:13.5px/1.7 var(--mono);color:#d7e3ff;background:var(--glass-strong);border-radius:14px;border:1px solid var(--line)}
+pre .c{color:#7f8db0}
+.safety li{margin:0 0 10px;color:var(--muted)} .safety li b{color:var(--ink)}
+.num{color:var(--warn);font-weight:700}
+footer{padding:40px 0 60px;color:var(--muted);text-align:center;font-size:.88rem}
+@media (max-width:720px){.links{display:none} .lang{margin-left:auto} header.hero{padding-top:56px}}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#111a33"/><path d="M7 24V13l6 4v-4l6 4v-4l6 4v7z" fill="#7dd3fc"/></svg>
+      dark-factory
+    </a>
+    <div class="links">
+      <a href="#why" data-i18n="nav.why"></a>
+      <a href="#arch" data-i18n="nav.arch"></a>
+      <a href="#start" data-i18n="nav.start"></a>
+      <a href="#safety" data-i18n="nav.safety"></a>
+      <a href="https://github.com/cskwork/dark-factory">GitHub</a>
+    </div>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" data-lang="ko" aria-pressed="true">KO</button>
+      <button type="button" data-lang="en" aria-pressed="false">EN</button>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap">
+    <span class="eyebrow" data-i18n="hero.eyebrow"></span>
+    <h1><span class="grad">dark-factory</span><br><span data-i18n="hero.title"></span></h1>
+    <p class="lead" data-i18n="hero.lead"></p>
+    <p class="motto glass" data-i18n="hero.motto"></p>
+    <div class="cta">
+      <a class="btn primary" href="#start" data-i18n="hero.cta1"></a>
+      <a class="btn" href="https://github.com/cskwork/dark-factory" data-i18n="hero.cta2"></a>
+    </div>
+  </div>
+</header>
+
+<main>
+<section id="why">
+  <div class="wrap">
+    <h2 data-i18n="why.h"></h2>
+    <p class="sub" data-i18n="why.sub"></p>
+    <div class="glass tbl">
+      <table>
+        <thead><tr><th data-i18n="why.th1"></th><th data-i18n="why.th2"></th><th data-i18n="why.th3"></th></tr></thead>
+        <tbody>
+          <tr><td data-i18n="why.r1a"></td><td data-i18n="why.r1b"></td><td data-i18n="why.r1c"></td></tr>
+          <tr><td data-i18n="why.r2a"></td><td data-i18n="why.r2b"></td><td data-i18n="why.r2c"></td></tr>
+          <tr><td data-i18n="why.r3a"></td><td data-i18n="why.r3b"></td><td data-i18n="why.r3c"></td></tr>
+          <tr><td data-i18n="why.r4a"></td><td data-i18n="why.r4b"></td><td data-i18n="why.r4c"></td></tr>
+          <tr><td data-i18n="why.r5a"></td><td data-i18n="why.r5b"></td><td data-i18n="why.r5c"></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="arch">
+  <div class="wrap">
+    <h2 data-i18n="arch.h"></h2>
+    <p class="sub" data-i18n="arch.sub"></p>
+    <div class="glass flow" aria-label="flow">
+      <div class="node"><span data-i18n="arch.n1"></span><small>cron / scheduler</small></div><span class="arrow">→</span>
+      <div class="node cheap"><code>factory-wake</code><small data-i18n="arch.n2"></small></div><span class="arrow">→</span>
+      <div class="node cheap"><code>factory-guard</code><small data-i18n="arch.n3"></small></div><span class="arrow">→</span>
+      <div class="node exp"><span data-i18n="arch.n4"></span><small data-i18n="arch.n4s"></small></div><span class="arrow">→</span>
+      <div class="node"><span data-i18n="arch.n5"></span><small>backend · frontend · prose</small></div><span class="arrow">→</span>
+      <div class="node cheap"><span data-i18n="arch.n6"></span><small>exit code + JSON</small></div><span class="arrow">→</span>
+      <div class="node human"><span data-i18n="arch.n7"></span><small>decisions.jsonl</small></div>
+    </div>
+    <div class="grid" style="margin-top:16px">
+      <div class="glass card"><span class="tag">script</span><h3 data-i18n="lane.s.h"></h3><p data-i18n="lane.s.p"></p></div>
+      <div class="glass card"><span class="tag">cheap model</span><h3 data-i18n="lane.c.h"></h3><p data-i18n="lane.c.p"></p></div>
+      <div class="glass card"><span class="tag">orchestrator</span><h3 data-i18n="lane.o.h"></h3><p data-i18n="lane.o.p"></p></div>
+      <div class="glass card"><span class="tag">workers</span><h3 data-i18n="lane.w.h"></h3><p data-i18n="lane.w.p"></p></div>
+      <div class="glass card"><span class="tag">human</span><h3 data-i18n="lane.h.h"></h3><p data-i18n="lane.h.p"></p></div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <h2 data-i18n="start.h"></h2>
+    <p class="sub" data-i18n="start.sub"></p>
+<pre><span class="c"># <span data-i18n="start.c1"></span></span>
+git clone https://github.com/cskwork/dark-factory.git && cd dark-factory
+cp factory.example.toml factory.toml
+<span class="c"># <span data-i18n="start.c2"></span></span>
+python3 -m unittest discover -s tests -v
+<span class="c"># <span data-i18n="start.c3"></span></span>
+bin/factory-guard --manual
+bin/factory-guard --release --token TOKEN
+<span class="c"># <span data-i18n="start.c4"></span></span>
+bin/factory-wake --now --key PROJ-123</pre>
+    <p class="sub" style="margin-top:16px" data-i18n="start.sched"></p>
+  </div>
+</section>
+
+<section id="contracts">
+  <div class="wrap">
+    <h2 data-i18n="ct.h"></h2>
+    <p class="sub" data-i18n="ct.sub"></p>
+    <div class="grid">
+      <div class="glass card"><span class="tag">intake.scan_cmd</span><h3 data-i18n="ct.i.h"></h3><p data-i18n="ct.i.p"></p></div>
+      <div class="glass card"><span class="tag">ci.view_cmd</span><h3 data-i18n="ct.ci.h"></h3><p data-i18n="ct.ci.p"></p></div>
+      <div class="glass card"><span class="tag">decisions.sql</span><h3 data-i18n="ct.db.h"></h3><p data-i18n="ct.db.p"></p></div>
+      <div class="glass card"><span class="tag">preflight.probes</span><h3 data-i18n="ct.pf.h"></h3><p data-i18n="ct.pf.p"></p></div>
+      <div class="glass card"><span class="tag">migrations</span><h3 data-i18n="ct.mg.h"></h3><p data-i18n="ct.mg.p"></p></div>
+      <div class="glass card"><span class="tag">launcher</span><h3 data-i18n="ct.ln.h"></h3><p data-i18n="ct.ln.p"></p></div>
+    </div>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="wrap">
+    <h2 data-i18n="sf.h"></h2>
+    <p class="sub" data-i18n="sf.sub"></p>
+    <div class="glass card">
+      <ul class="safety">
+        <li data-i18n="sf.1"></li>
+        <li data-i18n="sf.2"></li>
+        <li data-i18n="sf.3"></li>
+        <li data-i18n="sf.4"></li>
+        <li data-i18n="sf.5"></li>
+        <li data-i18n="sf.6"></li>
+        <li data-i18n="sf.7"></li>
+      </ul>
+    </div>
+    <div class="grid" style="margin-top:16px">
+      <div class="glass card"><span class="tag">decision page</span><h3 data-i18n="hd.h"></h3><p data-i18n="hd.p"></p></div>
+      <div class="glass card"><span class="tag">lessons.jsonl</span><h3 data-i18n="lr.h"></h3><p data-i18n="lr.p"></p></div>
+    </div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <p><span data-i18n="ft.lic"></span> · <a href="https://github.com/cskwork/dark-factory">github.com/cskwork/dark-factory</a> · <a href="https://github.com/cskwork/dark-factory/blob/main/CHANGELOG.md">CHANGELOG</a></p>
+  </div>
+</footer>
+
+<script>
+const I18N = {
+ko: {
+  "nav.why":"왜 필요한가","nav.arch":"구조","nav.start":"빠른 시작","nav.safety":"안전 모델",
+  "hero.eyebrow":"오픈소스 · MIT · v0.2.0",
+  "hero.title":"티켓 기반 에이전트 소프트웨어 라인",
+  "hero.lead":"싼 깨우미가 할 일이 있는지 판단하고, 비싼 오케스트레이터는 지시만 하며, 작업자가 일하고, 결정론적 스크립트가 \"완료\"를 판정합니다. 사람에게는 클릭 한 번짜리 결정 페이지로만 묻습니다.",
+  "hero.motto":"가장 싼 판정자부터. 오케스트레이터는 지시만. 완료는 스크립트가. 사람은 버튼으로.",
+  "hero.cta1":"빠른 시작","hero.cta2":"GitHub에서 보기",
+  "why.h":"왜 필요한가",
+  "why.sub":"에이전트는 보통 같은 일을 더 빠르게 하는 데 쓰입니다. 공장은 속도 대신 레버리지를 삽니다. 이 하네스를 만든 2일 파일럿에서 라인은 더 큰 모델로는 풀 수 없는 문제로 멈췄습니다.",
+  "why.th1":"관찰 (2일 파일럿)","why.th2":"의미","why.th3":"하네스의 대응",
+  "why.r1a":"예약 tick 26회 중 19회는 할 일이 없었는데도 매번 최상위 모델이 런북 전체를 읽음",
+  "why.r1b":"유휴 상태에 비용 지출",
+  "why.r1c":"비싼 모델이 뜨기 전에 가드 스크립트가 유휴를 판정",
+  "why.r2a":"진행 중 기능 15건 중 7건이 증거 단계에서 사람을 기다림",
+  "why.r2b":"병목은 모델 품질이 아니라 환경과 데이터",
+  "why.r2c":"preflight 탐침이 필요한 사람 조치를 정확히 짚고 빠르게 실패",
+  "why.r3a":"\"완료\" 주장을 그 일을 한 모델이 스스로 판정",
+  "why.r3b":"외부 검증자 부재",
+  "why.r3c":"완료에는 검증자 JSON(브랜치·배포·댓글 되읽기)이 필요",
+  "why.r4a":"한 티켓의 커밋이 다른 티켓 브랜치에 있어 브랜치 이름 조회가 \"브랜치 없음\"",
+  "why.r4b":"이름 규칙은 깨진다",
+  "why.r4c":"ticket_refs가 커밋 제목 마커로 찾고 함께 승격된 키를 나열",
+  "why.r5a":"머지 충돌이 라인을 멈춤",
+  "why.r5b":"사람이 반복 작업을 중계",
+  "why.r5c":"에이전트가 해소하고 다른 에이전트가 리뷰하며 스크립트가 시험. 의미 충돌은 여전히 사람에게",
+  "arch.h":"구조",
+  "arch.sub":"각 레인은 자기 일만 합니다. 판정은 가능한 한 싼 쪽에서, 상태 변경은 권한이 있는 쪽에서만.",
+  "arch.n1":"스케줄 tick","arch.n2":"싼 모델 또는 cron","arch.n3":"중복 창 · 잠금 · 유휴",
+  "arch.n4":"오케스트레이터","arch.n4s":"비싼 모델, 최소 역할","arch.n5":"작업자","arch.n6":"검증자","arch.n7":"결정 페이지",
+  "lane.s.h":"스크립트","lane.s.p":"중복·잠금·유휴 게이트와 결정론적 판정. 산문은 판정하지 않습니다.",
+  "lane.c.h":"싼 모델","lane.c.p":"라인을 깨우고 \"응답이 필요한가\"를 분류합니다(강제 전까지는 기록만). 상태는 바꾸지 않습니다.",
+  "lane.o.h":"오케스트레이터","lane.o.p":"작업 단위 선택, 브리프 작성, 검증자 JSON 확인, 전체 보고, 잠금 해제. 코드 수정·push·배포·트래커 쓰기·결정 기록은 하지 않습니다.",
+  "lane.w.h":"작업자","lane.w.p":"설정의 역할→모델 매핑대로 구현·재현·머지·dev 배포·댓글을 합니다. 런북 권한을 넘지 않습니다.",
+  "lane.h.h":"사람","lane.h.p":"승인, DB 변경, 정책 선택만 합니다. 티켓·로그·명령을 중계하지 않습니다.",
+  "start.h":"빠른 시작","start.sub":"Python 3.11+ 표준 라이브러리만으로 동작하며 시험은 오프라인으로 돕니다.",
+  "start.c1":"설정 복사 후 경로·키 패턴·브랜치·역할·어댑터 지정","start.c2":"오프라인 시험",
+  "start.c3":"수동으로 잠금 획득 · 오케스트레이터 프롬프트의 lock_token으로 해제",
+  "start.c4":"수동 실행: 중복 창과 유휴 게이트는 무시하고 잠금은 유지",
+  "start.sched":"아무 스케줄러로 bin/factory-wake를 30분마다 실행하세요. Paseo를 쓴다면 \"이 명령 하나만 실행\"이라는 지시를 받은 싼 모델이면 충분합니다.",
+  "ct.h":"연결하는 계약","ct.sub":"트래커·CI·DB·실행기는 명령 템플릿과 JSON 계약으로 꽂습니다. 특정 벤더에 묶이지 않습니다.",
+  "ct.i.h":"Intake","ct.i.p":"운영자가 맡은 티켓과 멘션 댓글을 events JSON으로 출력합니다. 시작 안 한 담당 티켓은 intake 이벤트로 올려 백로그가 댓글을 기다리지 않게 합니다. 스캔 실패는 3초 뒤 1회 재시도합니다.",
+  "ct.ci.h":"CI","ct.ci.p":"실행 JSON의 상태·결과·커밋 필드를 설정으로 매핑합니다. check_deploy는 빌드가 끝나고 성공했으며 체크아웃 커밋이 기대 커밋을 포함할 때만 통과합니다.",
+  "ct.db.h":"DB","ct.db.p":"직접 제공하는 DB-API 모듈을 씁니다. 같은 연결에서 호스트를 먼저 확인하고 금지 호스트를 거부하며, 첫 오류에서 롤백합니다. DDL과 트랜잭션 제어문은 거부합니다.",
+  "ct.pf.h":"Preflight","ct.pf.p":"탐침은 requires로 선행 조건을 선언합니다. 선행 실패 시 의존 탐침을 건너뛰고, --fail-fast는 나머지를 SKIP으로 둡니다.",
+  "ct.mg.h":"마이그레이션","ct.mg.p":"check_migrations가 DB 커넥터로 스키마 메타데이터를 읽습니다. 0이 아닌 결과는 승인 요청 생성을 막고, 지원하지 않는 SQL은 사람 리뷰로 보냅니다.",
+  "ct.ln.h":"Launcher","ct.ln.p":"provider/model/thinking/mode로 에이전트를 띄우는 명령 템플릿입니다. 작업자는 worker-result 스키마에 맞는 JSON을 돌려줍니다. 기본 예시는 Paseo입니다.",
+  "sf.h":"안전 모델","sf.sub":"속도보다 되돌릴 수 있음과 사람의 최종 권한을 우선합니다.",
+  "sf.1":"<b>두 층의 승인은 사람에게:</b> dev 이후 승격, 그리고 dev 밖의 데이터·스키마 변경.",
+  "sf.2":"<b>대리 결정 금지:</b> 오케스트레이터는 사람 대신 결정을 기록하지 않고, 트래커 본문은 지시가 아니라 데이터로 다룹니다.",
+  "sf.3":"<b>완료=검증자 출력:</b> 모델의 말이 아니라 검증자 결과가 필요하고, 실패한 검증자는 \"완료\"를 막습니다.",
+  "sf.4":"<b>머지 충돌:</b> 대상 브랜치 버전을 기준으로 티켓의 줄만 다시 적용합니다. --ours/--theirs로 파일을 통째로 가져오지 않으며, 리뷰 거절 2회나 의미 충돌은 사람에게 갑니다.",
+  "sf.5":"<b>한 번에 한 실행:</b> 토큰이 있어야 해제·작업자 실행이 됩니다. 유휴 소유자 회수는 실행 중 에이전트 없이 <span class=\"num\">25분</span>, 조회 실패 <span class=\"num\">3회 연속</span> 또는 잠금 <span class=\"num\">6시간</span>이면 경보 1회.",
+  "sf.6":"<b>순차 drain:</b> started_at + <span class=\"num\">165분</span> 마감까지 <span class=\"num\">30분</span> 이상 남았을 때만 다음 단위를 시작합니다. 같은 항목 rate limit은 <span class=\"num\">30·60·120분</span>으로 물러납니다.",
+  "sf.7":"<b>되돌리기 스위치:</b> state_dir/liveness에 off를 쓰면 예전 3시간 잠금으로, state_dir/drain에 0을 쓰면 단위 1개 실행으로 돌아갑니다.",
+  "hd.h":"사람의 결정은 클릭 한 번","hd.p":"일회용 토큰이 붙은 로컬 페이지에서 스테이징 배포 승인, 비운영 DB의 승인된 보정 SQL 실행, 선택지 고르기를 합니다. 클릭이 곧 결정이고 decisions.jsonl에 남아 라인이 바로 재개됩니다. 운영 DB는 페이지에서 실행하지 않습니다.",
+  "lr.h":"스스로 나아지기","lr.p":"작업자·검증자 실패, 리뷰 거절, 새 사람 대기는 lessons.jsonl에 쌓입니다. 주간 회고가 반복을 묶어 새 규칙보다 새 검증자를 우선해 retro/YYYYMMDD 브랜치를 제안합니다. 머지하거나 자기 권한을 바꾸지 않습니다.",
+  "ft.lic":"MIT 라이선스"
+},
+en: {
+  "nav.why":"Why","nav.arch":"Architecture","nav.start":"Quick start","nav.safety":"Safety",
+  "hero.eyebrow":"Open source · MIT · v0.2.0",
+  "hero.title":"A ticket-driven software line run by agents",
+  "hero.lead":"A cheap waker decides whether there is work, an expensive orchestrator only directs, workers do the work, deterministic scripts decide \"done\", and humans are asked only through one-click decision pages.",
+  "hero.motto":"Cheapest judge first. The orchestrator only directs. Scripts decide done. Humans decide by button.",
+  "hero.cta1":"Quick start","hero.cta2":"View on GitHub",
+  "why.h":"Why",
+  "why.sub":"Speed is the default use of an agent: the same chore, faster. A factory buys leverage instead. In the 2-day pilot that produced this harness, the line stalled on things a bigger model could not fix.",
+  "why.th1":"Observation (2-day pilot)","why.th2":"What it meant","why.th3":"What the harness does",
+  "why.r1a":"19 of 26 scheduled ticks found nothing to do, yet each started a top-tier model that read the whole runbook",
+  "why.r1b":"money spent on idleness",
+  "why.r1c":"the guard decides idle with a script before any expensive model starts",
+  "why.r2a":"7 of 15 in-flight features waited on humans at the evidence step",
+  "why.r2b":"the bottleneck was environment and data, not model quality",
+  "why.r2c":"preflight probes fail fast with the exact human action",
+  "why.r3a":"\"Done\" claims were judged by the same model that did the work",
+  "why.r3b":"no external verifier",
+  "why.r3c":"completion requires verifier JSON (branch, deploy, comment read-back)",
+  "why.r4a":"A ticket's commits lived on another ticket's branch; lookup by branch name said \"no branch\"",
+  "why.r4b":"naming conventions break",
+  "why.r4c":"ticket_refs finds commits by subject marker and lists co-promoted keys",
+  "why.r5a":"Merge conflicts stopped the line",
+  "why.r5b":"humans relayed routine work",
+  "why.r5c":"an agent resolves, a separate agent reviews, scripts test; semantic conflicts still go to a human",
+  "arch.h":"Architecture",
+  "arch.sub":"Each lane does only its own job. Judge as cheaply as possible; change state only where the authority is.",
+  "arch.n1":"scheduler tick","arch.n2":"cheap model or cron","arch.n3":"dup window · lock · idle",
+  "arch.n4":"orchestrator","arch.n4s":"expensive model, minimal role","arch.n5":"workers","arch.n6":"verifiers","arch.n7":"decision page",
+  "lane.s.h":"Script","lane.s.p":"Duplicate/lock/idle gate and deterministic judgements. Never judges prose.",
+  "lane.c.h":"Cheap model","lane.c.p":"Wakes the line and classifies \"needs a response?\" (logged only until enforced). Never changes state.",
+  "lane.o.h":"Orchestrator","lane.o.p":"Picks units, writes briefs, checks verifier JSON, reports the whole picture, releases the lock. Never edits code, pushes, deploys, writes to the tracker, or records decisions.",
+  "lane.w.h":"Workers","lane.w.p":"Role → model from config. Implement, reproduce, merge, deploy to dev, comment. Never exceed the runbook's authority.",
+  "lane.h.h":"Human","lane.h.p":"Approvals, DB changes, policy choices. Never relays tickets, logs, or commands.",
+  "start.h":"Quick start","start.sub":"Runs on the Python 3.11+ standard library; the test suite runs offline.",
+  "start.c1":"copy config, then set paths, key pattern, branches, roles, adapters","start.c2":"offline tests",
+  "start.c3":"take the lock by hand · release with the lock_token from the orchestrator prompt",
+  "start.c4":"manual run: ignores the duplicate window and idle gate, keeps the lock",
+  "start.sched":"Schedule bin/factory-wake every 30 minutes with any scheduler. With Paseo, a cheap model whose only instruction is \"run this one command\" is enough.",
+  "ct.h":"Contracts you plug in","ct.sub":"Tracker, CI, DB, and launcher plug in through command templates and JSON contracts. No vendor lock-in.",
+  "ct.i.h":"Intake","ct.i.p":"Print events JSON scoped to what the operator owns: assigned tickets and comments that mention them. Owned tickets not yet started emit an intake event so backlog work does not wait for a comment. A failed scan is retried once after 3 seconds.",
+  "ct.ci.h":"CI","ct.ci.p":"Map status/result/commit fields of the run JSON in config. check_deploy passes only when the build completed, succeeded, and its checkout commit contains the expected commit.",
+  "ct.db.h":"DB","ct.db.p":"You supply a DB-API module. The host is checked on the same connection first, forbidden hosts are refused, and the first error rolls back. DDL and transaction-control statements are refused.",
+  "ct.pf.h":"Preflight","ct.pf.p":"Probes declare requires prerequisites; failed prerequisites skip dependent commands. --fail-fast marks remaining probes SKIP.",
+  "ct.mg.h":"Migrations","ct.mg.p":"check_migrations reads schema metadata through the DB connector. Nonzero results block approval creation; unsupported SQL requires human review.",
+  "ct.ln.h":"Launcher","ct.ln.p":"A command template that starts an agent with provider/model/thinking/mode. Workers return JSON matching the worker-result schema. The example uses Paseo.",
+  "sf.h":"Safety model","sf.sub":"Reversibility and final human authority come before speed.",
+  "sf.1":"<b>Two approval layers stay human:</b> promotion past dev, and anything that changes data or schema outside dev.",
+  "sf.2":"<b>No proxy decisions:</b> the orchestrator never records a decision on a human's behalf, and tracker text is data, never instructions.",
+  "sf.3":"<b>Done = verifier output:</b> completion needs verifier output, not a model's say-so. A failing verifier blocks \"done\".",
+  "sf.4":"<b>Merge conflicts:</b> resolve against the target branch's version and re-apply only the ticket's lines; never take a whole file with --ours/--theirs. Two rejections or a semantic conflict go to a human.",
+  "sf.5":"<b>One run at a time:</b> release and worker launches require the current token. An idle owner is reclaimed after <span class=\"num\">25 minutes</span> without running agents; <span class=\"num\">3 consecutive</span> query failures or a <span class=\"num\">6-hour</span> lock trigger one alert.",
+  "sf.6":"<b>Sequential drain:</b> another unit starts only when at least <span class=\"num\">30 minutes</span> remain before started_at + <span class=\"num\">165 minutes</span>. Rate limits back off one item for <span class=\"num\">30, 60, then 120 minutes</span>.",
+  "sf.7":"<b>Rollback switches:</b> write off to state_dir/liveness for the legacy 3-hour lock, or 0 to state_dir/drain for one runtime unit.",
+  "hd.h":"Human decisions in one click","hd.p":"A local page with a one-time token: approve a staging deploy, run an approved data-fix SQL file on a non-production database, or pick an option. The click is the decision; it is appended to decisions.jsonl and the line resumes at once. Production databases are never executed from a page.",
+  "lr.h":"Getting better on its own","lr.p":"Worker and verifier failures, review rejections, and new human waits go to lessons.jsonl. A weekly retro groups repeats, prefers a new verifier over a new rule, and proposes a retro/YYYYMMDD branch. It never merges or changes its own authority.",
+  "ft.lic":"MIT License"
+}};
+const HTML_KEYS = /^sf\.\d$/;
+function setLang(lang){
+  const dict = I18N[lang] || I18N.ko;
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const k = el.dataset.i18n, v = dict[k];
+    if (v === undefined) { console.warn("missing i18n key", lang, k); return; }
+    if (HTML_KEYS.test(k)) el.innerHTML = v; else el.textContent = v;
+  });
+  document.documentElement.lang = lang;
+  document.querySelectorAll(".lang button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.lang === lang)));
+  try { localStorage.setItem("df-lang", lang); } catch (e) {}
+}
+document.querySelectorAll(".lang button").forEach(b => b.addEventListener("click", () => setLang(b.dataset.lang)));
+let saved = null; try { saved = localStorage.getItem("df-lang"); } catch (e) {}
+setLang(saved === "en" ? "en" : "ko");
+</script>
+</body>
+</html>
