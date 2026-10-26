@@ -5,88 +5,167 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>dark-factory — portable agent software-factory harness</title>
 <meta name="description" content="A portable harness that runs a ticket-driven software line with agents: cheap waker, minimal orchestrator, verifier-judged done, one-click human decisions.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b1020'/%3E%3Cpath d='M7 24V13l6 4v-4l6 4v-4l6 4v7z' fill='%237dd3fc'/%3E%3C/svg%3E">
+<meta name="theme-color" content="#e9ecea">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%231d2a3a'/%3E%3Ccircle cx='9' cy='16' r='4' fill='%232a7d4f'/%3E%3Ccircle cx='16' cy='16' r='4' fill='%23e8b100'/%3E%3Ccircle cx='23' cy='16' r='4' fill='%23c8322a'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,500..800&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#070b16; --ink:#e8eefc; --muted:#a9b6d3; --line:rgba(255,255,255,.12);
-  --glass:rgba(16,24,44,.62); --glass-strong:rgba(14,20,38,.82);
-  --a1:#7dd3fc; --a2:#a78bfa; --a3:#34d399; --warn:#fbbf24;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --paper:#e9ecea; --card:#f8f9f7; --ink:#1d2a3a; --muted:#4f5a68; --rule:rgba(29,42,58,.16); --rule-strong:rgba(29,42,58,.42);
+  --green:#2a7d4f; --amber:#e8b100; --amber-ink:#7a5d00; --red:#c8322a;
+  --display:"Archivo","IBM Plex Sans KR",sans-serif;
+  --body:"IBM Plex Sans KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+  --ease:cubic-bezier(.16,1,.3,1);
 }
 *{box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{margin:0;color:var(--ink);background:var(--bg);
-  font:16px/1.65 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Pretendard","Segoe UI","Noto Sans KR",sans-serif;
-  word-break:keep-all;overflow-wrap:anywhere}
-body::before{content:"";position:fixed;inset:-20vmax;z-index:-1;
-  background:
-    radial-gradient(40vmax 40vmax at 15% 10%,rgba(125,211,252,.22),transparent 60%),
-    radial-gradient(45vmax 45vmax at 90% 20%,rgba(167,139,250,.20),transparent 60%),
-    radial-gradient(40vmax 40vmax at 50% 100%,rgba(52,211,153,.14),transparent 60%)}
-a{color:var(--a1)}
-code{font-family:var(--mono);font-size:.88em;background:rgba(255,255,255,.08);padding:.1em .35em;border-radius:5px}
-.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
-.glass{background:var(--glass);border:1px solid var(--line);border-radius:18px;
-  backdrop-filter:blur(14px) saturate(140%);-webkit-backdrop-filter:blur(14px) saturate(140%);
-  box-shadow:0 10px 40px rgba(0,0,0,.35)}
-nav{position:sticky;top:0;z-index:10;background:rgba(7,11,22,.7);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
-nav .wrap{display:flex;align-items:center;gap:18px;height:58px}
-.brand{font-weight:700;letter-spacing:.2px;color:var(--ink);text-decoration:none;display:flex;gap:9px;align-items:center}
-.links{display:flex;gap:16px;margin-left:auto;font-size:.92rem}
-.links a{color:var(--muted);text-decoration:none}
-.links a:hover{color:var(--ink)}
-.lang{display:flex;border:1px solid var(--line);border-radius:999px;overflow:hidden}
-.lang button{all:unset;cursor:pointer;padding:4px 12px;font-size:.82rem;color:var(--muted)}
-.lang button[aria-pressed="true"]{background:var(--a1);color:#04121c;font-weight:700}
-.lang button:focus-visible{outline:2px solid var(--a2)}
-header.hero{padding:84px 0 40px;text-align:center}
-.eyebrow{display:inline-block;font-size:.8rem;color:var(--a1);border:1px solid rgba(125,211,252,.35);padding:4px 12px;border-radius:999px;margin-bottom:18px}
-h1{font-size:clamp(2.2rem,5vw,3.6rem);line-height:1.15;margin:0 0 18px;letter-spacing:-.5px}
-h1 .grad{background:linear-gradient(90deg,var(--a1),var(--a2));-webkit-background-clip:text;background-clip:text;color:transparent}
-.lead{max-width:760px;margin:0 auto 26px;color:var(--muted);font-size:1.08rem}
-.motto{max-width:820px;margin:0 auto 30px;padding:16px 22px;font-weight:600;background:var(--glass-strong)}
-.cta{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}
-.btn{display:inline-block;padding:11px 20px;border-radius:12px;text-decoration:none;font-weight:600;border:1px solid var(--line);color:var(--ink);background:rgba(255,255,255,.06)}
-.btn.primary{background:linear-gradient(90deg,var(--a1),var(--a2));color:#08101f;border:0}
-section{padding:46px 0}
-h2{font-size:1.7rem;margin:0 0 8px}
-.sub{color:var(--muted);margin:0 0 26px}
-.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
-.card{padding:22px}
-.card h3{margin:0 0 8px;font-size:1.08rem}
-.card p{margin:0;color:var(--muted);font-size:.95rem}
-.tag{font-family:var(--mono);font-size:.75rem;color:var(--a3);margin-bottom:8px;display:block}
-table{width:100%;border-collapse:collapse;font-size:.93rem}
-th,td{padding:12px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
-th{color:var(--a1);font-weight:600;background:rgba(255,255,255,.03)}
-td:first-child{font-weight:600;width:42%} td:nth-child(2){width:24%}
-.tbl{overflow-x:auto;padding:6px}
-.flow{padding:26px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:center;font-size:.9rem}
-.node{padding:10px 14px;border-radius:12px;border:1px solid var(--line);background:var(--glass-strong);text-align:center}
-.node small{display:block;color:var(--muted);font-size:.76rem}
-.node.cheap{border-color:rgba(52,211,153,.5)} .node.exp{border-color:rgba(167,139,250,.55)} .node.human{border-color:rgba(251,191,36,.55)}
-.arrow{color:var(--muted)}
-pre{margin:0;padding:20px;overflow-x:auto;font:13.5px/1.7 var(--mono);color:#d7e3ff;background:var(--glass-strong);border-radius:14px;border:1px solid var(--line)}
-pre .c{color:#7f8db0}
-.safety li{margin:0 0 10px;color:var(--muted)} .safety li b{color:var(--ink)}
-.num{color:var(--warn);font-weight:700}
-footer{padding:40px 0 60px;color:var(--muted);text-align:center;font-size:.88rem}
-@media (max-width:720px){.links{display:none} .lang{margin-left:auto} header.hero{padding-top:56px}}
+html{scroll-behavior:smooth;scrollbar-color:var(--rule-strong) var(--paper)}
+body{margin:0;background:var(--paper);color:var(--ink);font:17px/1.7 var(--body);word-break:keep-all;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;caret-color:var(--red)}
+::selection{background:var(--amber);color:var(--ink)}
+::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-track{background:var(--paper)} ::-webkit-scrollbar-thumb{background:var(--rule-strong);border-radius:5px;border:2px solid var(--paper)}
+a{color:var(--ink);text-decoration-thickness:1px;text-underline-offset:.22em}
+a:hover{text-decoration-color:var(--red)}
+:focus-visible{outline:2px solid var(--red);outline-offset:3px;border-radius:2px}
+code,kbd{font-family:var(--mono);font-size:.86em}
+p code,li code,td code{background:rgba(29,42,58,.06);padding:.08em .32em;border-radius:3px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 28px}
+
+nav{position:sticky;top:0;z-index:10;background:rgba(233,236,234,.94);border-bottom:1px solid var(--rule)}
+nav .wrap{display:flex;align-items:center;gap:28px;height:60px}
+.brand{display:flex;align-items:center;gap:10px;font:700 1.02rem/1 var(--display);font-stretch:112%;text-decoration:none;letter-spacing:-.01em}
+.lamps{display:inline-flex;gap:3px}
+.lamps i{width:8px;height:8px;border-radius:50%;display:block}
+.links{display:flex;gap:22px;margin-left:auto;font-size:.92rem}
+.links a{text-decoration:none;color:var(--muted)} .links a:hover{color:var(--ink)}
+.lang{display:flex;border:1px solid var(--rule-strong);border-radius:4px;overflow:hidden}
+.lang button{all:unset;cursor:pointer;padding:5px 11px;font:500 .78rem/1 var(--mono);color:var(--muted)}
+.lang button[aria-pressed="true"]{background:var(--ink);color:var(--paper)}
+.lang button:focus-visible{outline:2px solid var(--red);outline-offset:-2px}
+
+.hero{padding:72px 0 64px;border-bottom:1px solid var(--rule)}
+.hero .wrap{display:grid;grid-template-columns:1.08fr .92fr;gap:56px;align-items:start}
+.hero .wrap>*,.start-grid>*,.pair>*{min-width:0}
+h1{margin:0 0 22px;font:800 clamp(2.6rem,5.4vw,4.6rem)/.94 var(--display);font-stretch:115%;letter-spacing:-.035em;white-space:nowrap}
+.tagline{white-space:normal}
+.tagline{display:block;margin-top:18px;font:700 clamp(1.3rem,2.4vw,1.75rem)/1.3 var(--display);font-stretch:100%;letter-spacing:-.015em;text-wrap:balance}
+.lead{margin:0 0 26px;color:var(--muted);max-width:60ch}
+.cmd{border:1px solid var(--ink);background:var(--card);border-radius:4px}
+.cmd-head{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 12px 8px 16px;border-bottom:1px solid var(--rule);font-size:.86rem;color:var(--muted)}
+.copy{all:unset;cursor:pointer;font:500 .8rem/1 var(--mono);padding:7px 12px;border:1px solid var(--ink);border-radius:3px;color:var(--ink);white-space:nowrap;transition:background .2s var(--ease)}
+.copy:hover{background:var(--amber)}
+.copy:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+.copy[data-state="done"]{background:var(--green);border-color:var(--green);color:#fff}
+.copy[data-state="error"]{background:var(--red);border-color:var(--red);color:#fff}
+.cmd pre{margin:0;padding:16px;overflow-x:auto;font:14px/1.75 var(--mono)}
+.hero-links{margin-top:18px;display:flex;gap:22px;font-size:.95rem;flex-wrap:wrap}
+
+.board{background:var(--ink);color:var(--paper);border-radius:6px;padding:20px 20px 16px}
+.board-title{display:flex;justify-content:space-between;font:500 .8rem/1 var(--body);color:#aeb7c4;padding-bottom:14px;border-bottom:1px solid rgba(244,241,234,.16)}
+.stations{list-style:none;margin:0;padding:0}
+.stations li{display:grid;grid-template-columns:20px 1fr auto;gap:14px;align-items:center;padding:13px 0;border-bottom:1px solid rgba(244,241,234,.1)}
+.stations li:last-child{border-bottom:0}
+.lamp{width:14px;height:14px;border-radius:50%;background:#3a4656;box-shadow:inset 0 0 0 2px rgba(0,0,0,.25)}
+.lamp.g{background:var(--green)} .lamp.a{background:var(--amber)} .lamp.r{background:var(--red)}
+.st-name{font:600 1rem/1.25 var(--body)}
+.st-name small{display:block;font:400 .82rem/1.45 var(--body);color:#c3cad4;margin-top:2px}
+.st-code{font:500 .74rem/1 var(--mono);color:#aeb7c4;letter-spacing:.06em}
+.board-foot{margin:14px 0 0;font-size:.82rem;color:#c3cad4;display:flex;gap:16px;flex-wrap:wrap}
+.board-foot span{display:inline-flex;align-items:center;gap:6px}
+.board-foot i{width:9px;height:9px;border-radius:50%;display:inline-block}
+@media (prefers-reduced-motion:no-preference){
+  .stations .lamp{animation:lampOn .5s var(--ease) both}
+  .stations li:nth-child(2) .lamp{animation-delay:.18s} .stations li:nth-child(3) .lamp{animation-delay:.36s}
+  .stations li:nth-child(4) .lamp{animation-delay:.54s} .stations li:nth-child(5) .lamp{animation-delay:.72s}
+  .stations li:nth-child(6) .lamp{animation-delay:.9s}
+  @keyframes lampOn{from{background:#3a4656;filter:brightness(.6)}to{filter:none}}
+}
+
+section{padding:88px 0 0}
+h2{margin:0 0 12px;font:800 clamp(1.9rem,3.6vw,2.7rem)/1.08 var(--display);font-stretch:112%;letter-spacing:-.025em;text-wrap:balance}
+.sub{margin:0 0 36px;color:var(--muted);max-width:66ch}
+h3{margin:0 0 8px;font:700 1.12rem/1.3 var(--body)}
+
+.report{border-top:2px solid var(--ink);overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:.95rem;min-width:640px}
+th{font:600 .82rem/1.2 var(--body);text-align:left;color:var(--muted);padding:14px 16px 12px;border-bottom:1px solid var(--rule-strong)}
+td{padding:16px;vertical-align:top;border-bottom:1px solid var(--rule)}
+td:first-child{width:42%;font-weight:500} td:nth-child(2){width:22%;color:var(--muted)}
+td:last-child{position:relative;padding-left:34px}
+td:last-child::before{content:"";position:absolute;left:12px;top:24px;width:9px;height:9px;border-radius:50%;background:var(--green)}
+
+.figure{background:var(--card);border:1px solid var(--rule-strong);border-radius:6px;overflow-x:auto;padding:16px}
+.figure svg{display:block;width:100%;height:auto}
+.figure.flow svg{min-width:860px}
+.figure.drain svg{min-width:720px}
+.figcap{margin:12px 0 0;font-size:.9rem;color:var(--muted);max-width:72ch}
+
+.lanes{margin-top:40px;border-top:2px solid var(--ink)}
+.lane{display:grid;grid-template-columns:200px 1fr 1fr;gap:28px;padding:20px 0;border-bottom:1px solid var(--rule)}
+.lane-who{display:flex;gap:10px;align-items:baseline}
+.lane-who .lamp{flex:none;transform:translateY(2px)}
+.lane-who b{font:700 1.02rem/1.3 var(--body)}
+.lane-who code{display:block;color:var(--muted);font-size:.78rem;margin-top:2px}
+.lane p{margin:0;font-size:.95rem}
+.lane .lbl{display:block;font:600 .76rem/1 var(--body);color:var(--muted);margin-bottom:6px}
+.lane .never{color:var(--muted)}
+
+.start-grid{display:grid;grid-template-columns:1.25fr .75fr;gap:40px;align-items:start}
+.steps{margin:0;padding:0;list-style:none;counter-reset:s}
+.steps li{counter-increment:s;padding:0 0 18px 44px;position:relative}
+.steps li::before{content:counter(s);position:absolute;left:0;top:0;width:28px;height:28px;border-radius:50%;border:1.5px solid var(--ink);font:600 .85rem/25px var(--mono);text-align:center}
+.steps li p{margin:2px 0 8px}
+.steps pre{margin:0;padding:12px 14px;background:var(--card);border:1px solid var(--rule-strong);border-radius:4px;overflow-x:auto;font:13.5px/1.7 var(--mono)}
+.aside{border-left:1px solid var(--rule-strong);padding-left:24px;font-size:.95rem;color:var(--muted)}
+.aside p{margin:0 0 14px}
+
+.kanban{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.kcard{background:var(--card);border:1px solid var(--rule-strong);border-radius:4px;position:relative;padding:0 0 18px}
+.kcard::before{content:"";position:absolute;top:14px;right:14px;width:10px;height:10px;border-radius:50%;background:var(--paper);box-shadow:inset 0 1px 2px rgba(29,42,58,.35)}
+.khead{padding:12px 16px 10px;border-bottom:1px dashed var(--rule-strong)}
+.khead code{font-size:.8rem;color:var(--muted)}
+.khead h3{margin:4px 0 0}
+.kcard p{margin:12px 16px 0;font-size:.93rem}
+
+.rules{list-style:none;margin:0;padding:0;border-top:2px solid var(--ink)}
+.rules li{display:grid;grid-template-columns:240px 1fr;gap:28px;padding:18px 0;border-bottom:1px solid var(--rule)}
+.rules b{font-weight:700}
+.rules span{color:var(--muted)}
+.num{color:var(--ink);font-weight:700;background:linear-gradient(transparent 62%,rgba(232,177,0,.45) 62%)}
+.drain-h{margin:64px 0 8px;font-size:1.25rem}
+.pair{display:grid;grid-template-columns:1.15fr .85fr;gap:40px;margin-top:64px}
+.pair h3{font-size:1.25rem}
+.pair p{margin:0;color:var(--muted)}
+
+footer{margin-top:104px;border-top:1px solid var(--rule);padding:28px 0 48px;font-size:.88rem;color:var(--muted)}
+footer .wrap{display:flex;gap:20px;flex-wrap:wrap;justify-content:space-between}
+
+@media (max-width:900px){
+  .hero .wrap,.start-grid,.pair{grid-template-columns:1fr}
+  .kanban{grid-template-columns:1fr 1fr}
+  .lane{grid-template-columns:1fr;gap:10px}
+  .rules li{grid-template-columns:1fr;gap:4px}
+  .aside{border-left:0;padding-left:0;border-top:1px solid var(--rule-strong);padding-top:20px}
+}
+@media (max-width:640px){
+  .links{display:none} .lang{margin-left:auto}
+  .wrap{padding:0 20px}
+  .hero{padding-top:48px}
+  .kanban{grid-template-columns:1fr}
+  section{padding-top:68px}
+}
 @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
 </style>
 </head>
 <body>
 <nav>
   <div class="wrap">
-    <a class="brand" href="#top">
-      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#111a33"/><path d="M7 24V13l6 4v-4l6 4v-4l6 4v7z" fill="#7dd3fc"/></svg>
-      dark-factory
-    </a>
+    <a class="brand" href="#top"><span class="lamps" aria-hidden="true"><i style="background:var(--green)"></i><i style="background:var(--amber)"></i><i style="background:var(--red)"></i></span>dark-factory</a>
     <div class="links">
-      <a href="#why" data-i18n="nav.why"></a>
-      <a href="#arch" data-i18n="nav.arch"></a>
-      <a href="#start" data-i18n="nav.start"></a>
-      <a href="#safety" data-i18n="nav.safety"></a>
+      <a href="#why" data-i18n="nav.why">왜 필요한가</a>
+      <a href="#arch" data-i18n="nav.arch">구조</a>
+      <a href="#start" data-i18n="nav.start">빠른 시작</a>
+      <a href="#safety" data-i18n="nav.safety">안전 모델</a>
       <a href="https://github.com/cskwork/dark-factory">GitHub</a>
     </div>
     <div class="lang" role="group" aria-label="Language">
@@ -98,31 +177,51 @@ footer{padding:40px 0 60px;color:var(--muted);text-align:center;font-size:.88rem
 
 <header class="hero" id="top">
   <div class="wrap">
-    <span class="eyebrow" data-i18n="hero.eyebrow"></span>
-    <h1><span class="grad">dark-factory</span><br><span data-i18n="hero.title"></span></h1>
-    <p class="lead" data-i18n="hero.lead"></p>
-    <p class="motto glass" data-i18n="hero.motto"></p>
-    <div class="cta">
-      <a class="btn primary" href="#start" data-i18n="hero.cta1"></a>
-      <a class="btn" href="https://github.com/cskwork/dark-factory" data-i18n="hero.cta2"></a>
+    <div>
+      <h1>dark-factory<span class="tagline" data-i18n="hero.title">에이전트가 돌리는 티켓 기반 소프트웨어 라인</span></h1>
+      <p class="lead" data-i18n="hero.lead">싼 깨우미가 할 일이 있는지 판단하고, 비싼 오케스트레이터는 지시만 하며, 작업자가 일하고, 결정론적 스크립트가 "완료"를 판정합니다. 사람에게는 클릭 한 번짜리 결정 페이지로만 묻습니다.</p>
+      <div class="cmd">
+        <div class="cmd-head"><span data-i18n="hero.cmd">받아서 오프라인 시험 돌리기</span><button type="button" class="copy" id="copy" data-i18n="copy.idle">복사</button></div>
+<pre id="cmd-text">git clone https://github.com/cskwork/dark-factory.git
+cd dark-factory
+python3 -m unittest discover -s tests -v</pre>
+      </div>
+      <div class="hero-links">
+        <a href="https://github.com/cskwork/dark-factory" data-i18n="hero.cta2">GitHub 저장소</a>
+        <a href="#arch" data-i18n="hero.cta3">라인 구조 보기</a>
+        <span style="color:var(--muted)">MIT · v0.2.0</span>
+      </div>
     </div>
+
+    <aside class="board" aria-labelledby="board-title">
+      <div class="board-title"><span id="board-title" data-i18n="board.title">라인 현황판 예시</span><span style="font-family:var(--mono);letter-spacing:.08em">ANDON</span></div>
+      <ol class="stations">
+        <li><span class="lamp g" aria-hidden="true"></span><span class="st-name"><span data-i18n="st.wake">깨우기</span><small data-i18n="st.wake.s">30분마다 싼 모델이나 cron이 라인을 깨움</small></span><span class="st-code">WAKE</span></li>
+        <li><span class="lamp g" aria-hidden="true"></span><span class="st-name"><span data-i18n="st.guard">가드</span><small data-i18n="st.guard.s">중복·잠금·유휴를 스크립트로 판정</small></span><span class="st-code">GUARD</span></li>
+        <li><span class="lamp g" aria-hidden="true"></span><span class="st-name"><span data-i18n="st.orch">지시</span><small data-i18n="st.orch.s">비싼 모델은 작업을 고르고 브리프만 씀</small></span><span class="st-code">DIRECT</span></li>
+        <li><span class="lamp g" aria-hidden="true"></span><span class="st-name"><span data-i18n="st.work">작업</span><small data-i18n="st.work.s">역할별 모델이 구현·재현·머지·dev 배포</small></span><span class="st-code">WORK</span></li>
+        <li><span class="lamp r" aria-hidden="true"></span><span class="st-name"><span data-i18n="st.verify">검증</span><small data-i18n="st.verify.s">검증자가 실패하면 "완료"는 막힘</small></span><span class="st-code">VERIFY</span></li>
+        <li><span class="lamp a" aria-hidden="true"></span><span class="st-name"><span data-i18n="st.decide">사람 결정</span><small data-i18n="st.decide.s">승인·DB 변경은 버튼 한 번으로</small></span><span class="st-code">DECIDE</span></li>
+      </ol>
+      <p class="board-foot"><span><i style="background:var(--green)"></i><span data-i18n="lg.green">흐름·통과</span></span><span><i style="background:var(--amber)"></i><span data-i18n="lg.amber">사람 대기</span></span><span><i style="background:var(--red)"></i><span data-i18n="lg.red">정지·실패</span></span></p>
+    </aside>
   </div>
 </header>
 
 <main>
 <section id="why">
   <div class="wrap">
-    <h2 data-i18n="why.h"></h2>
-    <p class="sub" data-i18n="why.sub"></p>
-    <div class="glass tbl">
+    <h2 data-i18n="why.h">더 큰 모델로는 안 풀리는 문제</h2>
+    <p class="sub" data-i18n="why.sub">에이전트는 보통 같은 일을 더 빠르게 하는 데 쓰입니다. 공장은 속도 대신 레버리지를 삽니다. 이 하네스를 만든 2일 파일럿에서 라인은 이런 이유로 멈췄습니다.</p>
+    <div class="report">
       <table>
-        <thead><tr><th data-i18n="why.th1"></th><th data-i18n="why.th2"></th><th data-i18n="why.th3"></th></tr></thead>
+        <thead><tr><th data-i18n="why.th1">관찰 (2일 파일럿)</th><th data-i18n="why.th2">의미</th><th data-i18n="why.th3">하네스의 대응</th></tr></thead>
         <tbody>
-          <tr><td data-i18n="why.r1a"></td><td data-i18n="why.r1b"></td><td data-i18n="why.r1c"></td></tr>
-          <tr><td data-i18n="why.r2a"></td><td data-i18n="why.r2b"></td><td data-i18n="why.r2c"></td></tr>
-          <tr><td data-i18n="why.r3a"></td><td data-i18n="why.r3b"></td><td data-i18n="why.r3c"></td></tr>
-          <tr><td data-i18n="why.r4a"></td><td data-i18n="why.r4b"></td><td data-i18n="why.r4c"></td></tr>
-          <tr><td data-i18n="why.r5a"></td><td data-i18n="why.r5b"></td><td data-i18n="why.r5c"></td></tr>
+          <tr><td data-i18n="why.r1a">예약 tick 26회 중 19회는 할 일이 없었는데도 매번 최상위 모델이 런북 전체를 읽음</td><td data-i18n="why.r1b">유휴 상태에 비용 지출</td><td data-i18n="why.r1c">비싼 모델이 뜨기 전에 가드 스크립트가 유휴를 판정</td></tr>
+          <tr><td data-i18n="why.r2a">진행 중 기능 15건 중 7건이 증거 단계에서 사람을 기다림</td><td data-i18n="why.r2b">병목은 모델 품질이 아니라 환경과 데이터</td><td data-i18n="why.r2c">preflight 탐침이 필요한 사람 조치를 정확히 짚고 빠르게 실패</td></tr>
+          <tr><td data-i18n="why.r3a">"완료" 주장을 그 일을 한 모델이 스스로 판정</td><td data-i18n="why.r3b">외부 검증자 부재</td><td data-i18n="why.r3c">완료에는 검증자 JSON(브랜치·배포·댓글 되읽기)이 필요</td></tr>
+          <tr><td data-i18n="why.r4a">한 티켓의 커밋이 다른 티켓 브랜치에 있어 브랜치 이름 조회가 "브랜치 없음"</td><td data-i18n="why.r4b">이름 규칙은 깨진다</td><td data-i18n="why.r4c">ticket_refs가 커밋 제목 마커로 찾고 함께 승격된 키를 나열</td></tr>
+          <tr><td data-i18n="why.r5a">머지 충돌이 라인을 멈춤</td><td data-i18n="why.r5b">사람이 반복 작업을 중계</td><td data-i18n="why.r5c">에이전트가 해소하고 다른 에이전트가 리뷰하며 스크립트가 시험. 의미 충돌은 여전히 사람에게</td></tr>
         </tbody>
       </table>
     </div>
@@ -131,78 +230,178 @@ footer{padding:40px 0 60px;color:var(--muted);text-align:center;font-size:.88rem
 
 <section id="arch">
   <div class="wrap">
-    <h2 data-i18n="arch.h"></h2>
-    <p class="sub" data-i18n="arch.sub"></p>
-    <div class="glass flow" aria-label="flow">
-      <div class="node"><span data-i18n="arch.n1"></span><small>cron / scheduler</small></div><span class="arrow">→</span>
-      <div class="node cheap"><code>factory-wake</code><small data-i18n="arch.n2"></small></div><span class="arrow">→</span>
-      <div class="node cheap"><code>factory-guard</code><small data-i18n="arch.n3"></small></div><span class="arrow">→</span>
-      <div class="node exp"><span data-i18n="arch.n4"></span><small data-i18n="arch.n4s"></small></div><span class="arrow">→</span>
-      <div class="node"><span data-i18n="arch.n5"></span><small>backend · frontend · prose</small></div><span class="arrow">→</span>
-      <div class="node cheap"><span data-i18n="arch.n6"></span><small>exit code + JSON</small></div><span class="arrow">→</span>
-      <div class="node human"><span data-i18n="arch.n7"></span><small>decisions.jsonl</small></div>
+    <h2 data-i18n="arch.h">tick 한 번이 지나가는 길</h2>
+    <p class="sub" data-i18n="arch.sub">판정은 가능한 한 싼 쪽에서, 상태 변경은 권한이 있는 쪽에서만 합니다. 각 레인은 자기 일만 합니다.</p>
+    <div class="figure flow">
+      <svg viewBox="0 0 1000 660" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="flow-title flow-desc">
+        <title id="flow-title" data-i18n="fig.flow.t">dark-factory tick 흐름</title>
+        <desc id="flow-desc" data-i18n="fig.flow.d">스케줄 tick이 깨우기와 가드를 거쳐, 할 일이 없으면 멈추고, 있으면 오케스트레이터·작업자·검증자를 지나 완료되거나 사람 결정 뒤 다시 시작되는 흐름.</desc>
+        <defs>
+          <marker id="ar" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5a68"/></marker>
+          <marker id="ar-g" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#2a7d4f"/></marker>
+          <marker id="ar-r" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#c8322a"/></marker>
+          <marker id="ar-a" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#7a5d00"/></marker>
+        </defs>
+        <g font-family="'IBM Plex Sans KR','Apple SD Gothic Neo',sans-serif">
+        <g fill="none" stroke-width="1.4">
+          <line x1="420" y1="72" x2="420" y2="102" stroke="#4f5a68" marker-end="url(#ar)"/>
+          <line x1="420" y1="160" x2="420" y2="182" stroke="#4f5a68" marker-end="url(#ar)"/>
+          <line x1="524" y1="232" x2="638" y2="232" stroke="#4f5a68" marker-end="url(#ar)"/>
+          <line x1="420" y1="280" x2="420" y2="310" stroke="#2a7d4f" stroke-width="1.8" marker-end="url(#ar-g)"/>
+          <line x1="420" y1="368" x2="420" y2="398" stroke="#2a7d4f" stroke-width="1.8" marker-end="url(#ar-g)"/>
+          <line x1="420" y1="456" x2="420" y2="478" stroke="#2a7d4f" stroke-width="1.8" marker-end="url(#ar-g)"/>
+          <line x1="524" y1="528" x2="638" y2="528" stroke="#2a7d4f" stroke-width="1.8" marker-end="url(#ar-g)"/>
+          <path d="M316 528 H208 Q200 528 200 520 V348 Q200 340 208 340 H318" stroke="#c8322a" stroke-dasharray="5 4" marker-end="url(#ar-r)"/>
+          <line x1="520" y1="340" x2="638" y2="340" stroke="#7a5d00" marker-end="url(#ar-a)"/>
+          <path d="M840 340 H892 Q900 340 900 332 V140 Q900 132 892 132 H522" stroke="#4f5a68" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+        </g>
+        <g font-family="'IBM Plex Mono',monospace" font-size="10" letter-spacing="1.2" text-anchor="middle">
+          <rect x="561" y="208" width="40" height="14" fill="#f8f9f7"/><text x="581" y="219" fill="#4f5a68">IDLE</text>
+          <rect x="430" y="288" width="44" height="14" fill="#f8f9f7"/><text x="452" y="299" fill="#2a7d4f">WORK</text>
+          <rect x="561" y="504" width="40" height="14" fill="#f8f9f7"/><text x="581" y="515" fill="#2a7d4f">PASS</text>
+          <rect x="150" y="428" width="40" height="14" fill="#f8f9f7"/><text x="170" y="439" fill="#c8322a">FAIL</text>
+          <rect x="553" y="316" width="52" height="14" fill="#f8f9f7"/><text x="579" y="327" fill="#7a5d00">HUMAN</text>
+          <rect x="910" y="228" width="60" height="14" fill="#f8f9f7"/><text x="940" y="239" fill="#4f5a68">RESUME</text>
+        </g>
+        <rect x="320" y="24" width="200" height="48" rx="20" fill="#e9ecea" stroke="rgba(29,42,58,.42)"/>
+        <text x="420" y="45" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.tick">스케줄 tick</text>
+        <text x="420" y="62" text-anchor="middle" font-size="10" font-family="'IBM Plex Mono',monospace" fill="#4f5a68">every 30 min</text>
+
+        <rect x="320" y="104" width="200" height="56" rx="6" fill="#ffffff" stroke="#1d2a3a"/>
+        <text x="420" y="128" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.wake">깨우기</text>
+        <text x="420" y="146" text-anchor="middle" font-size="10" font-family="'IBM Plex Mono',monospace" fill="#4f5a68">factory-wake</text>
+
+        <polygon points="420,184 524,232 420,280 316,232" fill="#ffffff" stroke="#1d2a3a"/>
+        <text x="420" y="229" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.guard">할 일 있나?</text>
+        <text x="420" y="246" text-anchor="middle" font-size="10" font-family="'IBM Plex Mono',monospace" fill="#4f5a68">factory-guard</text>
+
+        <rect x="640" y="208" width="200" height="48" rx="20" fill="#e9ecea" stroke="rgba(29,42,58,.42)"/>
+        <text x="740" y="229" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.stop">정지</text>
+        <text x="740" y="246" text-anchor="middle" font-size="10" fill="#4f5a68" data-i18n="n.stop.s">비싼 모델 안 띄움</text>
+
+        <rect x="320" y="312" width="200" height="56" rx="6" fill="#1d2a3a" stroke="#1d2a3a"/>
+        <text x="420" y="336" text-anchor="middle" font-size="14" font-weight="700" fill="#e9ecea" data-i18n="n.orch">오케스트레이터</text>
+        <text x="420" y="354" text-anchor="middle" font-size="10" fill="#c3cad4" data-i18n="n.orch.s">비싼 모델 · 지시만</text>
+
+        <rect x="320" y="400" width="200" height="56" rx="6" fill="#ffffff" stroke="#1d2a3a"/>
+        <text x="420" y="424" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.work">작업자</text>
+        <text x="420" y="442" text-anchor="middle" font-size="10" font-family="'IBM Plex Mono',monospace" fill="#4f5a68">factory-worker</text>
+
+        <polygon points="420,480 524,528 420,576 316,528" fill="#ffffff" stroke="#1d2a3a"/>
+        <text x="420" y="525" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.verify">검증 통과?</text>
+        <text x="420" y="542" text-anchor="middle" font-size="10" font-family="'IBM Plex Mono',monospace" fill="#4f5a68">exit code + JSON</text>
+
+        <rect x="640" y="504" width="200" height="48" rx="20" fill="rgba(42,125,79,.10)" stroke="#2a7d4f"/>
+        <text x="740" y="525" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.done">완료</text>
+        <text x="740" y="542" text-anchor="middle" font-size="10" fill="#4f5a68" data-i18n="n.done.s">검증자 JSON 확인</text>
+
+        <rect x="640" y="312" width="200" height="56" rx="6" fill="#e8b100" stroke="#7a5d00"/>
+        <text x="740" y="336" text-anchor="middle" font-size="14" font-weight="700" fill="#1d2a3a" data-i18n="n.decide">결정 페이지</text>
+        <text x="740" y="354" text-anchor="middle" font-size="10" font-family="'IBM Plex Mono',monospace" fill="#1d2a3a">decisions.jsonl</text>
+
+        <line x1="40" y1="600" x2="960" y2="600" stroke="rgba(29,42,58,.16)"/>
+        <g font-size="11" fill="#4f5a68">
+          <rect x="40" y="620" width="28" height="14" rx="7" fill="#e9ecea" stroke="rgba(29,42,58,.42)"/><text x="76" y="631" data-i18n="lg.oval">시작·끝</text>
+          <rect x="196" y="620" width="28" height="14" rx="2" fill="#fff" stroke="#1d2a3a"/><text x="232" y="631" data-i18n="lg.rect">단계</text>
+          <polygon points="352,627 366,620 380,627 366,634" fill="#fff" stroke="#1d2a3a"/><text x="388" y="631" data-i18n="lg.diamond">판정</text>
+          <line x1="520" y1="627" x2="552" y2="627" stroke="#2a7d4f" stroke-width="1.8" marker-end="url(#ar-g)"/><text x="560" y="631" data-i18n="lg.green">흐름·통과</text>
+          <line x1="680" y1="627" x2="712" y2="627" stroke="#7a5d00" stroke-width="1.4" marker-end="url(#ar-a)"/><text x="720" y="631" data-i18n="lg.amber">사람 대기</text>
+          <line x1="836" y1="627" x2="868" y2="627" stroke="#c8322a" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ar-r)"/><text x="876" y="631" data-i18n="lg.red">정지·실패</text>
+        </g>
+        </g>
+      </svg>
     </div>
-    <div class="grid" style="margin-top:16px">
-      <div class="glass card"><span class="tag">script</span><h3 data-i18n="lane.s.h"></h3><p data-i18n="lane.s.p"></p></div>
-      <div class="glass card"><span class="tag">cheap model</span><h3 data-i18n="lane.c.h"></h3><p data-i18n="lane.c.p"></p></div>
-      <div class="glass card"><span class="tag">orchestrator</span><h3 data-i18n="lane.o.h"></h3><p data-i18n="lane.o.p"></p></div>
-      <div class="glass card"><span class="tag">workers</span><h3 data-i18n="lane.w.h"></h3><p data-i18n="lane.w.p"></p></div>
-      <div class="glass card"><span class="tag">human</span><h3 data-i18n="lane.h.h"></h3><p data-i18n="lane.h.p"></p></div>
+    <p class="figcap" data-i18n="fig.flow.cap">검증에 실패하면 완료되지 않고 오케스트레이터로 돌아가며, 실패는 lessons.jsonl에 쌓여 주간 회고의 재료가 됩니다. 사람이 결정 페이지에서 누르면 그 키로 라인이 바로 다시 깨어납니다.</p>
+
+    <div class="lanes">
+      <div class="lane"><div class="lane-who"><span class="lamp" style="background:#8c96a3"></span><div><b data-i18n="lane.s.h">스크립트</b><code>factory-guard</code></div></div><p><span class="lbl" data-i18n="lbl.does">하는 일</span><span data-i18n="lane.s.do">중복·잠금·유휴 게이트, 결정론적 판정, 검증자 실행</span></p><p class="never"><span class="lbl" data-i18n="lbl.never">하지 않는 일</span><span data-i18n="lane.s.no">산문을 판정하지 않음</span></p></div>
+      <div class="lane"><div class="lane-who"><span class="lamp" style="background:#8c96a3"></span><div><b data-i18n="lane.c.h">싼 모델</b><code>factory-wake</code></div></div><p><span class="lbl" data-i18n="lbl.does">하는 일</span><span data-i18n="lane.c.do">라인 깨우기, "응답이 필요한가" 분류(강제 전까지는 기록만)</span></p><p class="never"><span class="lbl" data-i18n="lbl.never">하지 않는 일</span><span data-i18n="lane.c.no">상태를 바꾸지 않음</span></p></div>
+      <div class="lane"><div class="lane-who"><span class="lamp" style="background:var(--ink)"></span><div><b data-i18n="lane.o.h">오케스트레이터</b><code>orchestrator</code></div></div><p><span class="lbl" data-i18n="lbl.does">하는 일</span><span data-i18n="lane.o.do">작업 단위 선택, 브리프 작성, 검증자 JSON 확인, 전체 보고, 잠금 해제</span></p><p class="never"><span class="lbl" data-i18n="lbl.never">하지 않는 일</span><span data-i18n="lane.o.no">코드 수정·push·배포·트래커 쓰기·결정 기록</span></p></div>
+      <div class="lane"><div class="lane-who"><span class="lamp g"></span><div><b data-i18n="lane.w.h">작업자</b><code>factory-worker</code></div></div><p><span class="lbl" data-i18n="lbl.does">하는 일</span><span data-i18n="lane.w.do">설정의 역할→모델대로 구현·재현·머지·dev 배포·댓글</span></p><p class="never"><span class="lbl" data-i18n="lbl.never">하지 않는 일</span><span data-i18n="lane.w.no">런북 권한을 넘는 일</span></p></div>
+      <div class="lane"><div class="lane-who"><span class="lamp a"></span><div><b data-i18n="lane.h.h">사람</b><code>decision page</code></div></div><p><span class="lbl" data-i18n="lbl.does">하는 일</span><span data-i18n="lane.h.do">승인, DB 변경, 정책 선택</span></p><p class="never"><span class="lbl" data-i18n="lbl.never">하지 않는 일</span><span data-i18n="lane.h.no">티켓·로그·명령 중계</span></p></div>
     </div>
   </div>
 </section>
 
 <section id="start">
   <div class="wrap">
-    <h2 data-i18n="start.h"></h2>
-    <p class="sub" data-i18n="start.sub"></p>
-<pre><span class="c"># <span data-i18n="start.c1"></span></span>
-git clone https://github.com/cskwork/dark-factory.git && cd dark-factory
-cp factory.example.toml factory.toml
-<span class="c"># <span data-i18n="start.c2"></span></span>
-python3 -m unittest discover -s tests -v
-<span class="c"># <span data-i18n="start.c3"></span></span>
-bin/factory-guard --manual
-bin/factory-guard --release --token TOKEN
-<span class="c"># <span data-i18n="start.c4"></span></span>
-bin/factory-wake --now --key PROJ-123</pre>
-    <p class="sub" style="margin-top:16px" data-i18n="start.sched"></p>
+    <h2 data-i18n="start.h">빠른 시작</h2>
+    <p class="sub" data-i18n="start.sub">Python 3.11+ 표준 라이브러리만 씁니다. 시험은 네트워크 없이 돕니다.</p>
+    <div class="start-grid">
+      <ol class="steps">
+        <li><p data-i18n="start.c1">설정을 복사하고 경로·키 패턴·브랜치·역할·어댑터를 채웁니다.</p><pre>cp factory.example.toml factory.toml</pre></li>
+        <li><p data-i18n="start.c2">오프라인 시험을 돌립니다.</p><pre>python3 -m unittest discover -s tests -v</pre></li>
+        <li><p data-i18n="start.c3">잠금을 손으로 잡고, 오케스트레이터 프롬프트에 있는 lock_token으로 풉니다.</p><pre>bin/factory-guard --manual
+bin/factory-guard --release --token TOKEN</pre></li>
+        <li><p data-i18n="start.c4">특정 키로 바로 실행합니다. 중복 창과 유휴 게이트는 건너뛰고 잠금은 지킵니다.</p><pre>bin/factory-wake --now --key PROJ-123</pre></li>
+      </ol>
+      <div class="aside">
+        <p data-i18n="start.sched">아무 스케줄러로 bin/factory-wake를 30분마다 실행하세요. Paseo를 쓴다면 "이 명령 하나만 실행"이라는 지시를 받은 싼 모델이면 충분합니다.</p>
+        <p data-i18n="start.state">공유 상태는 python3 -m factory.state로 키 단위만 고칩니다. 작업자가 공유 객체를 통째로 읽고 다시 쓰지 않습니다.</p>
+      </div>
+    </div>
   </div>
 </section>
 
 <section id="contracts">
   <div class="wrap">
-    <h2 data-i18n="ct.h"></h2>
-    <p class="sub" data-i18n="ct.sub"></p>
-    <div class="grid">
-      <div class="glass card"><span class="tag">intake.scan_cmd</span><h3 data-i18n="ct.i.h"></h3><p data-i18n="ct.i.p"></p></div>
-      <div class="glass card"><span class="tag">ci.view_cmd</span><h3 data-i18n="ct.ci.h"></h3><p data-i18n="ct.ci.p"></p></div>
-      <div class="glass card"><span class="tag">decisions.sql</span><h3 data-i18n="ct.db.h"></h3><p data-i18n="ct.db.p"></p></div>
-      <div class="glass card"><span class="tag">preflight.probes</span><h3 data-i18n="ct.pf.h"></h3><p data-i18n="ct.pf.p"></p></div>
-      <div class="glass card"><span class="tag">migrations</span><h3 data-i18n="ct.mg.h"></h3><p data-i18n="ct.mg.p"></p></div>
-      <div class="glass card"><span class="tag">launcher</span><h3 data-i18n="ct.ln.h"></h3><p data-i18n="ct.ln.p"></p></div>
+    <h2 data-i18n="ct.h">꽂아 쓰는 계약</h2>
+    <p class="sub" data-i18n="ct.sub">트래커·CI·DB·실행기는 명령 템플릿과 JSON 계약으로 연결합니다. 특정 벤더에 묶이지 않습니다.</p>
+    <div class="kanban">
+      <article class="kcard"><div class="khead"><code>intake.scan_cmd</code><h3 data-i18n="ct.i.h">Intake</h3></div><p data-i18n="ct.i.p">운영자가 맡은 티켓과 멘션 댓글을 events JSON으로 출력합니다. 시작 안 한 담당 티켓은 intake 이벤트로 올려 백로그가 댓글을 기다리지 않게 합니다. 스캔 실패는 3초 뒤 1회 재시도합니다.</p></article>
+      <article class="kcard"><div class="khead"><code>ci.view_cmd</code><h3 data-i18n="ct.ci.h">CI</h3></div><p data-i18n="ct.ci.p">실행 JSON의 상태·결과·커밋 필드를 설정으로 매핑합니다. check_deploy는 빌드가 끝나고 성공했으며 체크아웃 커밋이 기대 커밋을 포함할 때만 통과합니다.</p></article>
+      <article class="kcard"><div class="khead"><code>decisions.sql</code><h3 data-i18n="ct.db.h">DB</h3></div><p data-i18n="ct.db.p">직접 제공하는 DB-API 모듈을 씁니다. 같은 연결에서 호스트를 먼저 확인하고 금지 호스트를 거부하며, 첫 오류에서 롤백합니다. DDL과 트랜잭션 제어문은 거부합니다.</p></article>
+      <article class="kcard"><div class="khead"><code>preflight.probes</code><h3 data-i18n="ct.pf.h">Preflight</h3></div><p data-i18n="ct.pf.p">탐침은 requires로 선행 조건을 선언합니다. 선행이 실패하면 의존 탐침을 건너뛰고, --fail-fast는 나머지를 SKIP으로 둡니다.</p></article>
+      <article class="kcard"><div class="khead"><code>migrations</code><h3 data-i18n="ct.mg.h">마이그레이션</h3></div><p data-i18n="ct.mg.p">check_migrations가 DB 커넥터로 스키마 메타데이터를 읽습니다. 0이 아닌 결과는 승인 요청 생성을 막고, 지원하지 않는 SQL은 사람 리뷰로 보냅니다.</p></article>
+      <article class="kcard"><div class="khead"><code>launcher</code><h3 data-i18n="ct.ln.h">Launcher</h3></div><p data-i18n="ct.ln.p">provider/model/thinking/mode로 에이전트를 띄우는 명령 템플릿입니다. 작업자는 worker-result 스키마에 맞는 JSON을 돌려줍니다. 기본 예시는 Paseo입니다.</p></article>
     </div>
   </div>
 </section>
 
 <section id="safety">
   <div class="wrap">
-    <h2 data-i18n="sf.h"></h2>
-    <p class="sub" data-i18n="sf.sub"></p>
-    <div class="glass card">
-      <ul class="safety">
-        <li data-i18n="sf.1"></li>
-        <li data-i18n="sf.2"></li>
-        <li data-i18n="sf.3"></li>
-        <li data-i18n="sf.4"></li>
-        <li data-i18n="sf.5"></li>
-        <li data-i18n="sf.6"></li>
-        <li data-i18n="sf.7"></li>
-      </ul>
+    <h2 data-i18n="sf.h">안전 모델</h2>
+    <p class="sub" data-i18n="sf.sub">속도보다 되돌릴 수 있음과 사람의 최종 권한을 앞에 둡니다.</p>
+    <ul class="rules">
+      <li><b data-i18n="sf.1h">두 층의 승인은 사람에게</b><span data-i18n="sf.1">dev 이후 승격, 그리고 dev 밖의 데이터·스키마 변경.</span></li>
+      <li><b data-i18n="sf.2h">대리 결정 금지</b><span data-i18n="sf.2">오케스트레이터는 사람 대신 결정을 기록하지 않고, 트래커 본문은 지시가 아니라 데이터로 다룹니다.</span></li>
+      <li><b data-i18n="sf.3h">완료는 검증자 출력</b><span data-i18n="sf.3">모델의 말이 아니라 검증자 결과가 필요하고, 실패한 검증자는 "완료"를 막습니다.</span></li>
+      <li><b data-i18n="sf.4h">머지 충돌</b><span data-i18n="sf.4">대상 브랜치 버전을 기준으로 티켓의 줄만 다시 적용합니다. --ours/--theirs로 파일을 통째로 가져오지 않으며, 리뷰 거절 2회나 의미 충돌은 사람에게 갑니다.</span></li>
+      <li><b data-i18n="sf.5h">한 번에 한 실행</b><span data-i18n="sf.5">토큰이 있어야 해제·작업자 실행이 됩니다. 유휴 소유자 회수는 실행 중 에이전트 없이 <span class="num">25분</span>, 조회 실패 <span class="num">3회 연속</span> 또는 잠금 <span class="num">6시간</span>이면 경보 1회.</span></li>
+      <li><b data-i18n="sf.7h">되돌리기 스위치</b><span data-i18n="sf.7">state_dir/liveness에 off를 쓰면 예전 3시간 잠금으로, state_dir/drain에 0을 쓰면 단위 1개 실행으로 돌아갑니다.</span></li>
+    </ul>
+
+    <h3 class="drain-h" data-i18n="sf.6h">순차 drain 예산</h3>
+    <p class="sub" style="margin-bottom:20px" data-i18n="sf.6">한 실행 안에서 단위를 차례로 처리하되, 마감(started_at + 165분)까지 30분 이상 남았을 때만 다음 단위를 시작합니다. 같은 항목의 rate limit은 30·60·120분으로 물러납니다.</p>
+    <div class="figure drain">
+      <svg viewBox="0 0 1000 168" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="drain-title drain-desc">
+        <title id="drain-title" data-i18n="fig.drain.t">순차 drain 시간 예산</title>
+        <desc id="drain-desc" data-i18n="fig.drain.d">실행 시작 후 135분까지는 다음 단위를 시작할 수 있고, 마감 165분 전 30분 구간에는 새 단위를 시작하지 않는다.</desc>
+        <defs>
+          <pattern id="hatch" width="8" height="8" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="8" height="8" fill="#f8f9f7"/><line x1="0" y1="0" x2="0" y2="8" stroke="#c8322a" stroke-width="2" opacity=".55"/></pattern>
+        </defs>
+        <g font-family="'IBM Plex Sans KR','Apple SD Gothic Neo',sans-serif">
+          <rect x="40" y="56" width="752" height="40" fill="rgba(42,125,79,.14)" stroke="#2a7d4f"/>
+          <rect x="792" y="56" width="168" height="40" fill="url(#hatch)" stroke="#c8322a"/>
+          <text x="56" y="81" font-size="13" font-weight="700" fill="#1d2a3a" data-i18n="dr.go">다음 단위 시작 가능</text>
+          <rect x="804" y="66" width="144" height="20" fill="#f8f9f7"/>
+          <text x="876" y="81" font-size="13" font-weight="700" fill="#c8322a" text-anchor="middle" data-i18n="dr.stop">새 단위 시작 안 함</text>
+          <g font-family="'IBM Plex Mono',monospace" font-size="11" fill="#4f5a68">
+            <line x1="40" y1="96" x2="40" y2="112" stroke="#1d2a3a"/><text x="40" y="128" text-anchor="start">0</text>
+            <line x1="792" y1="96" x2="792" y2="112" stroke="#1d2a3a"/><text x="792" y="128" text-anchor="middle">135 min</text>
+            <line x1="960" y1="96" x2="960" y2="112" stroke="#1d2a3a"/><text x="960" y="128" text-anchor="end">165 min</text>
+            <text x="40" y="40" fill="#1d2a3a">started_at</text>
+            <text x="960" y="40" text-anchor="end" fill="#1d2a3a">started_at + 165</text>
+            <text x="876" y="146" text-anchor="middle" fill="#c8322a">&lt; 30 min</text>
+          </g>
+          <text x="40" y="160" font-size="12" fill="#4f5a68" data-i18n="dr.note">작업자 시간 제한은 보고용으로 10분을 남깁니다. 단위마다 intake를 새로 읽고 새 이벤트를 먼저 처리합니다.</text>
+        </g>
+      </svg>
     </div>
-    <div class="grid" style="margin-top:16px">
-      <div class="glass card"><span class="tag">decision page</span><h3 data-i18n="hd.h"></h3><p data-i18n="hd.p"></p></div>
-      <div class="glass card"><span class="tag">lessons.jsonl</span><h3 data-i18n="lr.h"></h3><p data-i18n="lr.p"></p></div>
+
+    <div class="pair">
+      <div><h3 data-i18n="hd.h">사람의 결정은 클릭 한 번</h3><p data-i18n="hd.p">일회용 토큰이 붙은 로컬 페이지에서 스테이징 배포 승인, 비운영 DB의 승인된 보정 SQL 실행, 선택지 고르기를 합니다. 클릭이 곧 결정이고 decisions.jsonl에 남아 라인이 바로 재개됩니다. "보류"는 아무것도 기록하지 않습니다. 운영 DB는 페이지에서 실행하지 않습니다.</p></div>
+      <div><h3 data-i18n="lr.h">스스로 나아지기</h3><p data-i18n="lr.p">작업자·검증자 실패, 리뷰 거절, 새 사람 대기는 lessons.jsonl에 쌓입니다. 주간 회고가 반복을 묶어 새 규칙보다 새 검증자를 우선해 retro/YYYYMMDD 브랜치를 제안합니다. 머지하거나 자기 권한을 바꾸지 않습니다.</p></div>
     </div>
   </div>
 </section>
@@ -210,7 +409,8 @@ bin/factory-wake --now --key PROJ-123</pre>
 
 <footer>
   <div class="wrap">
-    <p><span data-i18n="ft.lic"></span> · <a href="https://github.com/cskwork/dark-factory">github.com/cskwork/dark-factory</a> · <a href="https://github.com/cskwork/dark-factory/blob/main/CHANGELOG.md">CHANGELOG</a></p>
+    <span><span data-i18n="ft.lic">MIT 라이선스</span> · v0.2.0</span>
+    <span><a href="https://github.com/cskwork/dark-factory">github.com/cskwork/dark-factory</a> · <a href="https://github.com/cskwork/dark-factory/blob/main/CHANGELOG.md">CHANGELOG</a> · <a href="https://github.com/cskwork/dark-factory/blob/main/templates/RUNBOOK.template.md">RUNBOOK</a></span>
   </div>
 </footer>
 
@@ -218,102 +418,106 @@ bin/factory-wake --now --key PROJ-123</pre>
 const I18N = {
 ko: {
   "nav.why":"왜 필요한가","nav.arch":"구조","nav.start":"빠른 시작","nav.safety":"안전 모델",
-  "hero.eyebrow":"오픈소스 · MIT · v0.2.0",
-  "hero.title":"티켓 기반 에이전트 소프트웨어 라인",
+  "hero.title":"에이전트가 돌리는 티켓 기반 소프트웨어 라인",
   "hero.lead":"싼 깨우미가 할 일이 있는지 판단하고, 비싼 오케스트레이터는 지시만 하며, 작업자가 일하고, 결정론적 스크립트가 \"완료\"를 판정합니다. 사람에게는 클릭 한 번짜리 결정 페이지로만 묻습니다.",
-  "hero.motto":"가장 싼 판정자부터. 오케스트레이터는 지시만. 완료는 스크립트가. 사람은 버튼으로.",
-  "hero.cta1":"빠른 시작","hero.cta2":"GitHub에서 보기",
-  "why.h":"왜 필요한가",
-  "why.sub":"에이전트는 보통 같은 일을 더 빠르게 하는 데 쓰입니다. 공장은 속도 대신 레버리지를 삽니다. 이 하네스를 만든 2일 파일럿에서 라인은 더 큰 모델로는 풀 수 없는 문제로 멈췄습니다.",
+  "hero.cmd":"받아서 오프라인 시험 돌리기","copy.idle":"복사","copy.done":"복사됨","copy.error":"복사 실패: 직접 선택하세요",
+  "hero.cta2":"GitHub 저장소","hero.cta3":"라인 구조 보기",
+  "board.title":"라인 현황판 예시",
+  "st.wake":"깨우기","st.wake.s":"30분마다 싼 모델이나 cron이 라인을 깨움",
+  "st.guard":"가드","st.guard.s":"중복·잠금·유휴를 스크립트로 판정",
+  "st.orch":"지시","st.orch.s":"비싼 모델은 작업을 고르고 브리프만 씀",
+  "st.work":"작업","st.work.s":"역할별 모델이 구현·재현·머지·dev 배포",
+  "st.verify":"검증","st.verify.s":"검증자가 실패하면 \"완료\"는 막힘",
+  "st.decide":"사람 결정","st.decide.s":"승인·DB 변경은 버튼 한 번으로",
+  "lg.green":"흐름·통과","lg.amber":"사람 대기","lg.red":"정지·실패",
+  "lg.oval":"시작·끝","lg.rect":"단계","lg.diamond":"판정",
+  "why.h":"더 큰 모델로는 안 풀리는 문제",
+  "why.sub":"에이전트는 보통 같은 일을 더 빠르게 하는 데 쓰입니다. 공장은 속도 대신 레버리지를 삽니다. 이 하네스를 만든 2일 파일럿에서 라인은 이런 이유로 멈췄습니다.",
   "why.th1":"관찰 (2일 파일럿)","why.th2":"의미","why.th3":"하네스의 대응",
-  "why.r1a":"예약 tick 26회 중 19회는 할 일이 없었는데도 매번 최상위 모델이 런북 전체를 읽음",
-  "why.r1b":"유휴 상태에 비용 지출",
-  "why.r1c":"비싼 모델이 뜨기 전에 가드 스크립트가 유휴를 판정",
-  "why.r2a":"진행 중 기능 15건 중 7건이 증거 단계에서 사람을 기다림",
-  "why.r2b":"병목은 모델 품질이 아니라 환경과 데이터",
-  "why.r2c":"preflight 탐침이 필요한 사람 조치를 정확히 짚고 빠르게 실패",
-  "why.r3a":"\"완료\" 주장을 그 일을 한 모델이 스스로 판정",
-  "why.r3b":"외부 검증자 부재",
-  "why.r3c":"완료에는 검증자 JSON(브랜치·배포·댓글 되읽기)이 필요",
-  "why.r4a":"한 티켓의 커밋이 다른 티켓 브랜치에 있어 브랜치 이름 조회가 \"브랜치 없음\"",
-  "why.r4b":"이름 규칙은 깨진다",
-  "why.r4c":"ticket_refs가 커밋 제목 마커로 찾고 함께 승격된 키를 나열",
-  "why.r5a":"머지 충돌이 라인을 멈춤",
-  "why.r5b":"사람이 반복 작업을 중계",
-  "why.r5c":"에이전트가 해소하고 다른 에이전트가 리뷰하며 스크립트가 시험. 의미 충돌은 여전히 사람에게",
-  "arch.h":"구조",
-  "arch.sub":"각 레인은 자기 일만 합니다. 판정은 가능한 한 싼 쪽에서, 상태 변경은 권한이 있는 쪽에서만.",
-  "arch.n1":"스케줄 tick","arch.n2":"싼 모델 또는 cron","arch.n3":"중복 창 · 잠금 · 유휴",
-  "arch.n4":"오케스트레이터","arch.n4s":"비싼 모델, 최소 역할","arch.n5":"작업자","arch.n6":"검증자","arch.n7":"결정 페이지",
-  "lane.s.h":"스크립트","lane.s.p":"중복·잠금·유휴 게이트와 결정론적 판정. 산문은 판정하지 않습니다.",
-  "lane.c.h":"싼 모델","lane.c.p":"라인을 깨우고 \"응답이 필요한가\"를 분류합니다(강제 전까지는 기록만). 상태는 바꾸지 않습니다.",
-  "lane.o.h":"오케스트레이터","lane.o.p":"작업 단위 선택, 브리프 작성, 검증자 JSON 확인, 전체 보고, 잠금 해제. 코드 수정·push·배포·트래커 쓰기·결정 기록은 하지 않습니다.",
-  "lane.w.h":"작업자","lane.w.p":"설정의 역할→모델 매핑대로 구현·재현·머지·dev 배포·댓글을 합니다. 런북 권한을 넘지 않습니다.",
-  "lane.h.h":"사람","lane.h.p":"승인, DB 변경, 정책 선택만 합니다. 티켓·로그·명령을 중계하지 않습니다.",
-  "start.h":"빠른 시작","start.sub":"Python 3.11+ 표준 라이브러리만으로 동작하며 시험은 오프라인으로 돕니다.",
-  "start.c1":"설정 복사 후 경로·키 패턴·브랜치·역할·어댑터 지정","start.c2":"오프라인 시험",
-  "start.c3":"수동으로 잠금 획득 · 오케스트레이터 프롬프트의 lock_token으로 해제",
-  "start.c4":"수동 실행: 중복 창과 유휴 게이트는 무시하고 잠금은 유지",
+  "why.r1a":"예약 tick 26회 중 19회는 할 일이 없었는데도 매번 최상위 모델이 런북 전체를 읽음","why.r1b":"유휴 상태에 비용 지출","why.r1c":"비싼 모델이 뜨기 전에 가드 스크립트가 유휴를 판정",
+  "why.r2a":"진행 중 기능 15건 중 7건이 증거 단계에서 사람을 기다림","why.r2b":"병목은 모델 품질이 아니라 환경과 데이터","why.r2c":"preflight 탐침이 필요한 사람 조치를 정확히 짚고 빠르게 실패",
+  "why.r3a":"\"완료\" 주장을 그 일을 한 모델이 스스로 판정","why.r3b":"외부 검증자 부재","why.r3c":"완료에는 검증자 JSON(브랜치·배포·댓글 되읽기)이 필요",
+  "why.r4a":"한 티켓의 커밋이 다른 티켓 브랜치에 있어 브랜치 이름 조회가 \"브랜치 없음\"","why.r4b":"이름 규칙은 깨진다","why.r4c":"ticket_refs가 커밋 제목 마커로 찾고 함께 승격된 키를 나열",
+  "why.r5a":"머지 충돌이 라인을 멈춤","why.r5b":"사람이 반복 작업을 중계","why.r5c":"에이전트가 해소하고 다른 에이전트가 리뷰하며 스크립트가 시험. 의미 충돌은 여전히 사람에게",
+  "arch.h":"tick 한 번이 지나가는 길",
+  "arch.sub":"판정은 가능한 한 싼 쪽에서, 상태 변경은 권한이 있는 쪽에서만 합니다. 각 레인은 자기 일만 합니다.",
+  "fig.flow.t":"dark-factory tick 흐름","fig.flow.d":"스케줄 tick이 깨우기와 가드를 거쳐, 할 일이 없으면 멈추고, 있으면 오케스트레이터·작업자·검증자를 지나 완료되거나 사람 결정 뒤 다시 시작되는 흐름.",
+  "fig.flow.cap":"검증에 실패하면 완료되지 않고 오케스트레이터로 돌아가며, 실패는 lessons.jsonl에 쌓여 주간 회고의 재료가 됩니다. 사람이 결정 페이지에서 누르면 그 키로 라인이 바로 다시 깨어납니다.",
+  "n.tick":"스케줄 tick","n.wake":"깨우기","n.guard":"할 일 있나?","n.stop":"정지","n.stop.s":"비싼 모델 안 띄움",
+  "n.orch":"오케스트레이터","n.orch.s":"비싼 모델 · 지시만","n.work":"작업자","n.verify":"검증 통과?","n.done":"완료","n.done.s":"검증자 JSON 확인","n.decide":"결정 페이지",
+  "lbl.does":"하는 일","lbl.never":"하지 않는 일",
+  "lane.s.h":"스크립트","lane.s.do":"중복·잠금·유휴 게이트, 결정론적 판정, 검증자 실행","lane.s.no":"산문을 판정하지 않음",
+  "lane.c.h":"싼 모델","lane.c.do":"라인 깨우기, \"응답이 필요한가\" 분류(강제 전까지는 기록만)","lane.c.no":"상태를 바꾸지 않음",
+  "lane.o.h":"오케스트레이터","lane.o.do":"작업 단위 선택, 브리프 작성, 검증자 JSON 확인, 전체 보고, 잠금 해제","lane.o.no":"코드 수정·push·배포·트래커 쓰기·결정 기록",
+  "lane.w.h":"작업자","lane.w.do":"설정의 역할→모델대로 구현·재현·머지·dev 배포·댓글","lane.w.no":"런북 권한을 넘는 일",
+  "lane.h.h":"사람","lane.h.do":"승인, DB 변경, 정책 선택","lane.h.no":"티켓·로그·명령 중계",
+  "start.h":"빠른 시작","start.sub":"Python 3.11+ 표준 라이브러리만 씁니다. 시험은 네트워크 없이 돕니다.",
+  "start.c1":"설정을 복사하고 경로·키 패턴·브랜치·역할·어댑터를 채웁니다.","start.c2":"오프라인 시험을 돌립니다.",
+  "start.c3":"잠금을 손으로 잡고, 오케스트레이터 프롬프트에 있는 lock_token으로 풉니다.","start.c4":"특정 키로 바로 실행합니다. 중복 창과 유휴 게이트는 건너뛰고 잠금은 지킵니다.",
   "start.sched":"아무 스케줄러로 bin/factory-wake를 30분마다 실행하세요. Paseo를 쓴다면 \"이 명령 하나만 실행\"이라는 지시를 받은 싼 모델이면 충분합니다.",
-  "ct.h":"연결하는 계약","ct.sub":"트래커·CI·DB·실행기는 명령 템플릿과 JSON 계약으로 꽂습니다. 특정 벤더에 묶이지 않습니다.",
+  "start.state":"공유 상태는 python3 -m factory.state로 키 단위만 고칩니다. 작업자가 공유 객체를 통째로 읽고 다시 쓰지 않습니다.",
+  "ct.h":"꽂아 쓰는 계약","ct.sub":"트래커·CI·DB·실행기는 명령 템플릿과 JSON 계약으로 연결합니다. 특정 벤더에 묶이지 않습니다.",
   "ct.i.h":"Intake","ct.i.p":"운영자가 맡은 티켓과 멘션 댓글을 events JSON으로 출력합니다. 시작 안 한 담당 티켓은 intake 이벤트로 올려 백로그가 댓글을 기다리지 않게 합니다. 스캔 실패는 3초 뒤 1회 재시도합니다.",
   "ct.ci.h":"CI","ct.ci.p":"실행 JSON의 상태·결과·커밋 필드를 설정으로 매핑합니다. check_deploy는 빌드가 끝나고 성공했으며 체크아웃 커밋이 기대 커밋을 포함할 때만 통과합니다.",
   "ct.db.h":"DB","ct.db.p":"직접 제공하는 DB-API 모듈을 씁니다. 같은 연결에서 호스트를 먼저 확인하고 금지 호스트를 거부하며, 첫 오류에서 롤백합니다. DDL과 트랜잭션 제어문은 거부합니다.",
-  "ct.pf.h":"Preflight","ct.pf.p":"탐침은 requires로 선행 조건을 선언합니다. 선행 실패 시 의존 탐침을 건너뛰고, --fail-fast는 나머지를 SKIP으로 둡니다.",
+  "ct.pf.h":"Preflight","ct.pf.p":"탐침은 requires로 선행 조건을 선언합니다. 선행이 실패하면 의존 탐침을 건너뛰고, --fail-fast는 나머지를 SKIP으로 둡니다.",
   "ct.mg.h":"마이그레이션","ct.mg.p":"check_migrations가 DB 커넥터로 스키마 메타데이터를 읽습니다. 0이 아닌 결과는 승인 요청 생성을 막고, 지원하지 않는 SQL은 사람 리뷰로 보냅니다.",
   "ct.ln.h":"Launcher","ct.ln.p":"provider/model/thinking/mode로 에이전트를 띄우는 명령 템플릿입니다. 작업자는 worker-result 스키마에 맞는 JSON을 돌려줍니다. 기본 예시는 Paseo입니다.",
-  "sf.h":"안전 모델","sf.sub":"속도보다 되돌릴 수 있음과 사람의 최종 권한을 우선합니다.",
-  "sf.1":"<b>두 층의 승인은 사람에게:</b> dev 이후 승격, 그리고 dev 밖의 데이터·스키마 변경.",
-  "sf.2":"<b>대리 결정 금지:</b> 오케스트레이터는 사람 대신 결정을 기록하지 않고, 트래커 본문은 지시가 아니라 데이터로 다룹니다.",
-  "sf.3":"<b>완료=검증자 출력:</b> 모델의 말이 아니라 검증자 결과가 필요하고, 실패한 검증자는 \"완료\"를 막습니다.",
-  "sf.4":"<b>머지 충돌:</b> 대상 브랜치 버전을 기준으로 티켓의 줄만 다시 적용합니다. --ours/--theirs로 파일을 통째로 가져오지 않으며, 리뷰 거절 2회나 의미 충돌은 사람에게 갑니다.",
-  "sf.5":"<b>한 번에 한 실행:</b> 토큰이 있어야 해제·작업자 실행이 됩니다. 유휴 소유자 회수는 실행 중 에이전트 없이 <span class=\"num\">25분</span>, 조회 실패 <span class=\"num\">3회 연속</span> 또는 잠금 <span class=\"num\">6시간</span>이면 경보 1회.",
-  "sf.6":"<b>순차 drain:</b> started_at + <span class=\"num\">165분</span> 마감까지 <span class=\"num\">30분</span> 이상 남았을 때만 다음 단위를 시작합니다. 같은 항목 rate limit은 <span class=\"num\">30·60·120분</span>으로 물러납니다.",
-  "sf.7":"<b>되돌리기 스위치:</b> state_dir/liveness에 off를 쓰면 예전 3시간 잠금으로, state_dir/drain에 0을 쓰면 단위 1개 실행으로 돌아갑니다.",
-  "hd.h":"사람의 결정은 클릭 한 번","hd.p":"일회용 토큰이 붙은 로컬 페이지에서 스테이징 배포 승인, 비운영 DB의 승인된 보정 SQL 실행, 선택지 고르기를 합니다. 클릭이 곧 결정이고 decisions.jsonl에 남아 라인이 바로 재개됩니다. 운영 DB는 페이지에서 실행하지 않습니다.",
+  "sf.h":"안전 모델","sf.sub":"속도보다 되돌릴 수 있음과 사람의 최종 권한을 앞에 둡니다.",
+  "sf.1h":"두 층의 승인은 사람에게","sf.1":"dev 이후 승격, 그리고 dev 밖의 데이터·스키마 변경.",
+  "sf.2h":"대리 결정 금지","sf.2":"오케스트레이터는 사람 대신 결정을 기록하지 않고, 트래커 본문은 지시가 아니라 데이터로 다룹니다.",
+  "sf.3h":"완료는 검증자 출력","sf.3":"모델의 말이 아니라 검증자 결과가 필요하고, 실패한 검증자는 \"완료\"를 막습니다.",
+  "sf.4h":"머지 충돌","sf.4":"대상 브랜치 버전을 기준으로 티켓의 줄만 다시 적용합니다. --ours/--theirs로 파일을 통째로 가져오지 않으며, 리뷰 거절 2회나 의미 충돌은 사람에게 갑니다.",
+  "sf.5h":"한 번에 한 실행","sf.5":"토큰이 있어야 해제·작업자 실행이 됩니다. 유휴 소유자 회수는 실행 중 에이전트 없이 <span class=\"num\">25분</span>, 조회 실패 <span class=\"num\">3회 연속</span> 또는 잠금 <span class=\"num\">6시간</span>이면 경보 1회.",
+  "sf.7h":"되돌리기 스위치","sf.7":"state_dir/liveness에 off를 쓰면 예전 3시간 잠금으로, state_dir/drain에 0을 쓰면 단위 1개 실행으로 돌아갑니다.",
+  "sf.6h":"순차 drain 예산","sf.6":"한 실행 안에서 단위를 차례로 처리하되, 마감(started_at + 165분)까지 30분 이상 남았을 때만 다음 단위를 시작합니다. 같은 항목의 rate limit은 30·60·120분으로 물러납니다.",
+  "fig.drain.t":"순차 drain 시간 예산","fig.drain.d":"실행 시작 후 135분까지는 다음 단위를 시작할 수 있고, 마감 165분 전 30분 구간에는 새 단위를 시작하지 않는다.",
+  "dr.go":"다음 단위 시작 가능","dr.stop":"새 단위 시작 안 함","dr.note":"작업자 시간 제한은 보고용으로 10분을 남깁니다. 단위마다 intake를 새로 읽고 새 이벤트를 먼저 처리합니다.",
+  "hd.h":"사람의 결정은 클릭 한 번","hd.p":"일회용 토큰이 붙은 로컬 페이지에서 스테이징 배포 승인, 비운영 DB의 승인된 보정 SQL 실행, 선택지 고르기를 합니다. 클릭이 곧 결정이고 decisions.jsonl에 남아 라인이 바로 재개됩니다. \"보류\"는 아무것도 기록하지 않습니다. 운영 DB는 페이지에서 실행하지 않습니다.",
   "lr.h":"스스로 나아지기","lr.p":"작업자·검증자 실패, 리뷰 거절, 새 사람 대기는 lessons.jsonl에 쌓입니다. 주간 회고가 반복을 묶어 새 규칙보다 새 검증자를 우선해 retro/YYYYMMDD 브랜치를 제안합니다. 머지하거나 자기 권한을 바꾸지 않습니다.",
   "ft.lic":"MIT 라이선스"
 },
 en: {
   "nav.why":"Why","nav.arch":"Architecture","nav.start":"Quick start","nav.safety":"Safety",
-  "hero.eyebrow":"Open source · MIT · v0.2.0",
   "hero.title":"A ticket-driven software line run by agents",
   "hero.lead":"A cheap waker decides whether there is work, an expensive orchestrator only directs, workers do the work, deterministic scripts decide \"done\", and humans are asked only through one-click decision pages.",
-  "hero.motto":"Cheapest judge first. The orchestrator only directs. Scripts decide done. Humans decide by button.",
-  "hero.cta1":"Quick start","hero.cta2":"View on GitHub",
-  "why.h":"Why",
-  "why.sub":"Speed is the default use of an agent: the same chore, faster. A factory buys leverage instead. In the 2-day pilot that produced this harness, the line stalled on things a bigger model could not fix.",
+  "hero.cmd":"Clone and run the offline tests","copy.idle":"Copy","copy.done":"Copied","copy.error":"Copy failed: select it by hand",
+  "hero.cta2":"GitHub repository","hero.cta3":"See how the line runs",
+  "board.title":"Example line status",
+  "st.wake":"Wake","st.wake.s":"A cheap model or cron wakes the line every 30 minutes",
+  "st.guard":"Guard","st.guard.s":"A script decides duplicate, lock, and idle",
+  "st.orch":"Direct","st.orch.s":"The expensive model picks units and writes briefs",
+  "st.work":"Work","st.work.s":"Role-mapped models implement, reproduce, merge, deploy to dev",
+  "st.verify":"Verify","st.verify.s":"A failing verifier blocks \"done\"",
+  "st.decide":"Human decision","st.decide.s":"Approvals and DB changes take one click",
+  "lg.green":"Flow · pass","lg.amber":"Waiting on a human","lg.red":"Stop · fail",
+  "lg.oval":"Start · end","lg.rect":"Step","lg.diamond":"Decision",
+  "why.h":"Problems a bigger model cannot fix",
+  "why.sub":"Speed is the default use of an agent: the same chore, faster. A factory buys leverage instead. In the 2-day pilot that produced this harness, the line stalled for these reasons.",
   "why.th1":"Observation (2-day pilot)","why.th2":"What it meant","why.th3":"What the harness does",
-  "why.r1a":"19 of 26 scheduled ticks found nothing to do, yet each started a top-tier model that read the whole runbook",
-  "why.r1b":"money spent on idleness",
-  "why.r1c":"the guard decides idle with a script before any expensive model starts",
-  "why.r2a":"7 of 15 in-flight features waited on humans at the evidence step",
-  "why.r2b":"the bottleneck was environment and data, not model quality",
-  "why.r2c":"preflight probes fail fast with the exact human action",
-  "why.r3a":"\"Done\" claims were judged by the same model that did the work",
-  "why.r3b":"no external verifier",
-  "why.r3c":"completion requires verifier JSON (branch, deploy, comment read-back)",
-  "why.r4a":"A ticket's commits lived on another ticket's branch; lookup by branch name said \"no branch\"",
-  "why.r4b":"naming conventions break",
-  "why.r4c":"ticket_refs finds commits by subject marker and lists co-promoted keys",
-  "why.r5a":"Merge conflicts stopped the line",
-  "why.r5b":"humans relayed routine work",
-  "why.r5c":"an agent resolves, a separate agent reviews, scripts test; semantic conflicts still go to a human",
-  "arch.h":"Architecture",
-  "arch.sub":"Each lane does only its own job. Judge as cheaply as possible; change state only where the authority is.",
-  "arch.n1":"scheduler tick","arch.n2":"cheap model or cron","arch.n3":"dup window · lock · idle",
-  "arch.n4":"orchestrator","arch.n4s":"expensive model, minimal role","arch.n5":"workers","arch.n6":"verifiers","arch.n7":"decision page",
-  "lane.s.h":"Script","lane.s.p":"Duplicate/lock/idle gate and deterministic judgements. Never judges prose.",
-  "lane.c.h":"Cheap model","lane.c.p":"Wakes the line and classifies \"needs a response?\" (logged only until enforced). Never changes state.",
-  "lane.o.h":"Orchestrator","lane.o.p":"Picks units, writes briefs, checks verifier JSON, reports the whole picture, releases the lock. Never edits code, pushes, deploys, writes to the tracker, or records decisions.",
-  "lane.w.h":"Workers","lane.w.p":"Role → model from config. Implement, reproduce, merge, deploy to dev, comment. Never exceed the runbook's authority.",
-  "lane.h.h":"Human","lane.h.p":"Approvals, DB changes, policy choices. Never relays tickets, logs, or commands.",
-  "start.h":"Quick start","start.sub":"Runs on the Python 3.11+ standard library; the test suite runs offline.",
-  "start.c1":"copy config, then set paths, key pattern, branches, roles, adapters","start.c2":"offline tests",
-  "start.c3":"take the lock by hand · release with the lock_token from the orchestrator prompt",
-  "start.c4":"manual run: ignores the duplicate window and idle gate, keeps the lock",
+  "why.r1a":"19 of 26 scheduled ticks found nothing to do, yet each started a top-tier model that read the whole runbook","why.r1b":"money spent on idleness","why.r1c":"the guard decides idle with a script before any expensive model starts",
+  "why.r2a":"7 of 15 in-flight features waited on humans at the evidence step","why.r2b":"the bottleneck was environment and data, not model quality","why.r2c":"preflight probes fail fast with the exact human action",
+  "why.r3a":"\"Done\" claims were judged by the same model that did the work","why.r3b":"no external verifier","why.r3c":"completion requires verifier JSON (branch, deploy, comment read-back)",
+  "why.r4a":"A ticket's commits lived on another ticket's branch; lookup by branch name said \"no branch\"","why.r4b":"naming conventions break","why.r4c":"ticket_refs finds commits by subject marker and lists co-promoted keys",
+  "why.r5a":"Merge conflicts stopped the line","why.r5b":"humans relayed routine work","why.r5c":"an agent resolves, a separate agent reviews, scripts test; semantic conflicts still go to a human",
+  "arch.h":"The path of one tick",
+  "arch.sub":"Judge as cheaply as possible; change state only where the authority is. Each lane does only its own job.",
+  "fig.flow.t":"dark-factory tick flow","fig.flow.d":"A scheduled tick passes wake and guard, stops when idle, otherwise runs through orchestrator, workers, and verifiers to done, or resumes after a human decision.",
+  "fig.flow.cap":"A failed verifier does not reach done; it returns to the orchestrator, and the failure is appended to lessons.jsonl for the weekly retro. A click on a decision page wakes the line for that key at once.",
+  "n.tick":"Scheduler tick","n.wake":"Wake","n.guard":"Any work?","n.stop":"Stop","n.stop.s":"no expensive model",
+  "n.orch":"Orchestrator","n.orch.s":"expensive · directs only","n.work":"Workers","n.verify":"Verified?","n.done":"Done","n.done.s":"verifier JSON checked","n.decide":"Decision page",
+  "lbl.does":"DOES","lbl.never":"NEVER",
+  "lane.s.h":"Script","lane.s.do":"Duplicate/lock/idle gate, deterministic judgements, verifiers","lane.s.no":"Judge prose",
+  "lane.c.h":"Cheap model","lane.c.do":"Wake the line, classify \"needs a response?\" (logged only until enforced)","lane.c.no":"Change state",
+  "lane.o.h":"Orchestrator","lane.o.do":"Pick units, write briefs, check verifier JSON, report the whole picture, release the lock","lane.o.no":"Edit code, push, deploy, write to the tracker, record decisions",
+  "lane.w.h":"Workers","lane.w.do":"Role → model from config: implement, reproduce, merge, deploy to dev, comment","lane.w.no":"Exceed the runbook's authority",
+  "lane.h.h":"Human","lane.h.do":"Approvals, DB changes, policy choices","lane.h.no":"Relay tickets, logs, or commands",
+  "start.h":"Quick start","start.sub":"Python 3.11+ standard library only. The test suite runs offline.",
+  "start.c1":"Copy the config, then set paths, key pattern, branches, roles, and adapters.","start.c2":"Run the offline tests.",
+  "start.c3":"Take the lock by hand; release it with the lock_token from the orchestrator prompt.","start.c4":"Run one key now. Ignores the duplicate window and idle gate, keeps the lock.",
   "start.sched":"Schedule bin/factory-wake every 30 minutes with any scheduler. With Paseo, a cheap model whose only instruction is \"run this one command\" is enough.",
-  "ct.h":"Contracts you plug in","ct.sub":"Tracker, CI, DB, and launcher plug in through command templates and JSON contracts. No vendor lock-in.",
+  "start.state":"Patch shared state per key with python3 -m factory.state. Workers never read and rewrite whole shared objects.",
+  "ct.h":"Contracts you plug in","ct.sub":"Tracker, CI, DB, and launcher connect through command templates and JSON contracts. No vendor lock-in.",
   "ct.i.h":"Intake","ct.i.p":"Print events JSON scoped to what the operator owns: assigned tickets and comments that mention them. Owned tickets not yet started emit an intake event so backlog work does not wait for a comment. A failed scan is retried once after 3 seconds.",
   "ct.ci.h":"CI","ct.ci.p":"Map status/result/commit fields of the run JSON in config. check_deploy passes only when the build completed, succeeded, and its checkout commit contains the expected commit.",
   "ct.db.h":"DB","ct.db.p":"You supply a DB-API module. The host is checked on the same connection first, forbidden hosts are refused, and the first error rolls back. DDL and transaction-control statements are refused.",
@@ -321,30 +525,47 @@ en: {
   "ct.mg.h":"Migrations","ct.mg.p":"check_migrations reads schema metadata through the DB connector. Nonzero results block approval creation; unsupported SQL requires human review.",
   "ct.ln.h":"Launcher","ct.ln.p":"A command template that starts an agent with provider/model/thinking/mode. Workers return JSON matching the worker-result schema. The example uses Paseo.",
   "sf.h":"Safety model","sf.sub":"Reversibility and final human authority come before speed.",
-  "sf.1":"<b>Two approval layers stay human:</b> promotion past dev, and anything that changes data or schema outside dev.",
-  "sf.2":"<b>No proxy decisions:</b> the orchestrator never records a decision on a human's behalf, and tracker text is data, never instructions.",
-  "sf.3":"<b>Done = verifier output:</b> completion needs verifier output, not a model's say-so. A failing verifier blocks \"done\".",
-  "sf.4":"<b>Merge conflicts:</b> resolve against the target branch's version and re-apply only the ticket's lines; never take a whole file with --ours/--theirs. Two rejections or a semantic conflict go to a human.",
-  "sf.5":"<b>One run at a time:</b> release and worker launches require the current token. An idle owner is reclaimed after <span class=\"num\">25 minutes</span> without running agents; <span class=\"num\">3 consecutive</span> query failures or a <span class=\"num\">6-hour</span> lock trigger one alert.",
-  "sf.6":"<b>Sequential drain:</b> another unit starts only when at least <span class=\"num\">30 minutes</span> remain before started_at + <span class=\"num\">165 minutes</span>. Rate limits back off one item for <span class=\"num\">30, 60, then 120 minutes</span>.",
-  "sf.7":"<b>Rollback switches:</b> write off to state_dir/liveness for the legacy 3-hour lock, or 0 to state_dir/drain for one runtime unit.",
-  "hd.h":"Human decisions in one click","hd.p":"A local page with a one-time token: approve a staging deploy, run an approved data-fix SQL file on a non-production database, or pick an option. The click is the decision; it is appended to decisions.jsonl and the line resumes at once. Production databases are never executed from a page.",
+  "sf.1h":"Two approval layers stay human","sf.1":"Promotion past dev, and anything that changes data or schema outside dev.",
+  "sf.2h":"No proxy decisions","sf.2":"The orchestrator never records a decision on a human's behalf, and tracker text is data, never instructions.",
+  "sf.3h":"Done means verifier output","sf.3":"Completion needs verifier output, not a model's say-so. A failing verifier blocks \"done\".",
+  "sf.4h":"Merge conflicts","sf.4":"Resolve against the target branch's version and re-apply only the ticket's lines; never take a whole file with --ours/--theirs. Two rejections or a semantic conflict go to a human.",
+  "sf.5h":"One run at a time","sf.5":"Release and worker launches require the current token. An idle owner is reclaimed after <span class=\"num\">25 minutes</span> without running agents; <span class=\"num\">3 consecutive</span> query failures or a <span class=\"num\">6-hour</span> lock trigger one alert.",
+  "sf.7h":"Rollback switches","sf.7":"Write off to state_dir/liveness for the legacy 3-hour lock, or 0 to state_dir/drain for one runtime unit.",
+  "sf.6h":"Sequential drain budget","sf.6":"One run handles units in sequence, but starts another only when at least 30 minutes remain before started_at + 165 minutes. Rate limits back off one item for 30, 60, then 120 minutes.",
+  "fig.drain.t":"Sequential drain time budget","fig.drain.d":"Another unit may start until minute 135 of a run; in the last 30 minutes before the 165-minute deadline no new unit starts.",
+  "dr.go":"Another unit may start","dr.stop":"No new unit","dr.note":"Worker timeouts reserve 10 minutes for reporting. Intake is refreshed before each unit and new events go first.",
+  "hd.h":"Human decisions in one click","hd.p":"A local page with a one-time token: approve a staging deploy, run an approved data-fix SQL file on a non-production database, or pick an option. The click is the decision; it is appended to decisions.jsonl and the line resumes at once. \"Hold\" records nothing. Production databases are never executed from a page.",
   "lr.h":"Getting better on its own","lr.p":"Worker and verifier failures, review rejections, and new human waits go to lessons.jsonl. A weekly retro groups repeats, prefers a new verifier over a new rule, and proposes a retro/YYYYMMDD branch. It never merges or changes its own authority.",
   "ft.lic":"MIT License"
 }};
-const HTML_KEYS = /^sf\.\d$/;
-function setLang(lang){
-  const dict = I18N[lang] || I18N.ko;
+const HTML_KEYS = new Set(["sf.5"]);
+let lang = "ko";
+const t = k => I18N[lang][k];
+function setLang(next){
+  lang = I18N[next] ? next : "ko";
   document.querySelectorAll("[data-i18n]").forEach(el => {
-    const k = el.dataset.i18n, v = dict[k];
+    const k = el.dataset.i18n, v = t(k);
     if (v === undefined) { console.warn("missing i18n key", lang, k); return; }
-    if (HTML_KEYS.test(k)) el.innerHTML = v; else el.textContent = v;
+    if (HTML_KEYS.has(k)) el.innerHTML = v; else el.textContent = v;
   });
   document.documentElement.lang = lang;
   document.querySelectorAll(".lang button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.lang === lang)));
   try { localStorage.setItem("df-lang", lang); } catch (e) {}
 }
 document.querySelectorAll(".lang button").forEach(b => b.addEventListener("click", () => setLang(b.dataset.lang)));
+const copyBtn = document.getElementById("copy");
+let copyTimer;
+function setCopy(state){
+  if (state) copyBtn.dataset.state = state; else delete copyBtn.dataset.state;
+  copyBtn.dataset.i18n = "copy." + (state || "idle");
+  copyBtn.textContent = t(copyBtn.dataset.i18n);
+}
+copyBtn.addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(document.getElementById("cmd-text").textContent); setCopy("done"); }
+  catch (e) { setCopy("error"); }
+  clearTimeout(copyTimer);
+  copyTimer = setTimeout(() => setCopy(null), 2200);
+});
 let saved = null; try { saved = localStorage.getItem("df-lang"); } catch (e) {}
 setLang(saved === "en" ? "en" : "ko");
 </script>
