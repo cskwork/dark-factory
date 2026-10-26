@@ -147,6 +147,20 @@ operator, or the question needs the operator's own decision, use a decision page
 instead of a comment. When fixing starts on an intake ticket, move it to the
 in-progress status once and read the status back.
 
+Post-release follow-up: when an in-scope comment on a ticket already in a
+post-release status (released or release-verified) reports a problem with the
+released behaviour, do not reopen or queue the closed ticket. Read it, then
+open a new ticket linked to it (relates), assigned within the same scope, with
+a planner-readable description: symptom with a quoted line, what the original
+ticket changed, conditions and accounts from the comment, expected behaviour
+only from the ticket or the planning source (otherwise "to confirm"), and open
+items. Move it to the to-do status, comment on the original with the new link
+mentioning the reporter, and read all of it back. Record the new key right after
+creation so a rerun resumes instead of creating twice. Skip creation when the
+author announced filing the ticket themselves or a non-release-tracker ticket
+was linked after the comment; ask by decision page when it is unclear whether
+the comment reports a problem. The next intake scan picks up the new ticket.
+
 ## Local state
 
 `running.json` holds started_at/token/mode and liveness bookkeeping, including

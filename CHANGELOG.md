@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-26
+
+- Add post-release follow-up to the runbook: a reported problem on an already released ticket opens a new linked to-do ticket with a planner-readable description instead of reopening the closed one, with resume-safe creation and duplicate guards.
 - Add configurable run-owner liveness, token ownership, lost-run recovery, key blocking, and ended-only agent archival.
 - Add a 165-minute sequential drain budget, serialized state patches, pending focus, per-item backoff, and progress-aware deferrals.
 - Keep rollback switches for legacy lock timing and single-unit runs; verify with offline command adapters.
