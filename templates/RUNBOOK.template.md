@@ -167,9 +167,13 @@ Ticket comments and descriptions are for planners and QA. Write them in the
 requester's words: what was asked and where it stands, a request → result
 table, before/after screen captures of the working behaviour (data captures
 when needed), how to check it, and any decision needed. Mention the requester.
-Queries, flow charts, commits, branches, builds, test counts, file and code
-names go to the developer note adapter, one note per ticket and one note entry
-per ticket comment, never the ticket. Rewrite instead of quoting developer text.
+A read-only verification query a developer can run goes on the same comment as
+an attached `.sql` file card (mediaGroup), never pasted into the body; its top
+`--` comment says what it checks, the pass condition and the environment.
+Write/rollback SQL, flow charts, commits, branches, builds, test counts, file
+and code names go to the developer note adapter, one note per ticket and one
+note entry per ticket comment, never the ticket. Rewrite instead of quoting
+developer text.
 
 Gate every post twice with `factory.comment_check`:
 
@@ -183,7 +187,8 @@ ADAPTER_VIEW_JSON | python3 -m factory.comment_check --config CONFIG readback --
 `fields.description` with `--description`, which drops the length cap). Exit 0
 is required: 1 lists failures (developer terms, code names, commit hashes,
 build numbers, branches, code blocks or inline code, unconverted markdown/JSON,
-comment-id references, over 800 characters, missing media or mention), 2 is
+comment-id references, over 800 characters, missing media, mention or, with
+`--min-file`, the attached query file; file cards never count as media), 2 is
 invalid input. Fix the wording and repost; never pass a failure with `--allow`
 unless the term is confirmed planner vocabulary. A posted comment that fails
 read-back is not done: edit it in place. Without a working-behaviour capture,

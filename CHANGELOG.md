@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-10-27
+
+- Read-only verification queries a developer can run are attached to the ticket comment as a `.sql` file card instead of being pasted into the body; write/rollback SQL stays in the developer note. `factory.comment_check` counts file cards (mediaGroup) separately from inline images and adds `readback --min-file`.
+
 ## 0.3.0 - 2026-10-27
 
 - Add planner-readable ticket comments: a runbook section for the planner/QA comment shape (request → result, before/after captures, requester mention, developer detail in a separate note) and `factory.comment_check`, which lints a comment before posting and verifies the read-back (developer terms, code names, commits, builds, branches, code formatting, unconverted markup, length, media and mention minimums). `[comments]` adds locale terms, allowed words and patterns.

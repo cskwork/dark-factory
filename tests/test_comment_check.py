@@ -87,6 +87,15 @@ class CommentCheck(unittest.TestCase):
                                      json.dumps(view))
         self.assertEqual((code, report["author"], report["status"]), (0, "Bot", "PASS"))
 
+    def test_file_card_is_not_an_image(self):
+        card = {"type": "mediaGroup", "content": [{"type": "media", "attrs": {"type": "file", "id": "sql-1"}}]}
+        view = {"fields": {"comment": {"comments": [{"id": "7", "body": doc(MENTION, para("Fixed."), card)}]}}}
+        code, report = self.run_main(["readback", "--comment", "7", "--min-file", "1", "--min-media", "1"],
+                                     json.dumps(view))
+        self.assertEqual((code, self.rules(report), report["files"], report["media"]), (1, {"media"}, 1, 0))
+        code, report = self.run_main(["lint", self.write("f.md", "Fixed.\n![for developers](101_check.sql)\n")])
+        self.assertEqual((code, report["files"], report["media"]), (0, 1, 0))
+
     def test_readback_description_has_no_length_cap(self):
         view = {"fields": {"description": doc(para("word " * 400))}}
         code, report = self.run_main(["readback", "--description"], json.dumps(view))

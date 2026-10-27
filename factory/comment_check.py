@@ -6,7 +6,7 @@ adapter, not the ticket. Input is an Atlassian Document Format (ADF) document,
 markdown/plain text, or a tracker view JSON with `fields.comment.comments`.
 
   python3 -m factory.comment_check [--config CONFIG] lint comment.adf.json
-  ADAPTER_VIEW | python3 -m factory.comment_check readback --comment ID --min-media 1 --min-mention 1
+  ADAPTER_VIEW | python3 -m factory.comment_check readback --comment ID --min-media 1 --min-mention 1 [--min-file 1]
 
 Prints one JSON object; exit 0 passed, 1 failed, 2 invalid input.
 """
@@ -65,7 +65,7 @@ def settings(cfg):
     return {"max_chars": max_chars, "terms": TERMS + terms, "allow": allow, "patterns": patterns}
 
 
-def collect(node, found):
+def collect(node, found, parent=None):
     if isinstance(node, dict):
         kind = node.get("type")
         found["nodes"][kind] = found["nodes"].get(kind, 0) + 1
@@ -73,16 +73,17 @@ def collect(node, found):
             found["texts"].append(node.get("text", ""))
             found["marks"].update(m.get("type") for m in node.get("marks", []) if isinstance(m, dict))
         elif kind == "media":
+            # Inline images live in mediaSingle; file cards (attached verification queries) in mediaGroup.
             attrs = node.get("attrs", {})
-            found["media"].append(attrs.get("alt") or attrs.get("id") or "media")
+            found["files" if parent == "mediaGroup" else "media"].append(attrs.get("alt") or attrs.get("id") or "media")
         for child in node.get("content", []) or []:
-            collect(child, found)
+            collect(child, found, kind)
     return found
 
 
 def parse(document):
     """Return texts, node counts, marks and media for ADF or markdown/plain text."""
-    found = {"texts": [], "nodes": {}, "marks": set(), "media": []}
+    found = {"texts": [], "nodes": {}, "marks": set(), "media": [], "files": []}
     if isinstance(document, dict):
         return collect(document, found), True
     text = str(document)
@@ -90,7 +91,8 @@ def parse(document):
         found["nodes"]["codeBlock"] = 1
     if re.search(r"(?<!`)`[^`\n]+`(?!`)", text):
         found["marks"].add("code")
-    found["media"] = re.findall(r"!\[([^\]]*)\]\([^)]+\)", text)
+    for alt, target in re.findall(r"!\[([^\]]*)\]\(([^)]+)\)", text):
+        found["media" if re.search(r"\.(png|jpe?g|gif|webp)$", target, re.I) else "files"].append(alt)
     found["nodes"]["mention"] = len(re.findall(r"@\[[^\]]+\]\([^)]+\)", text))
     # Link and image targets are not prose; keep their labels only.
     found["texts"].append(re.sub(r"!?\[([^\]]*)\]\([^)]+\)", r"\1", text))
@@ -170,6 +172,7 @@ def main(argv=None):
     target.add_argument("--description", action="store_true")
     readback.add_argument("--min-media", type=int, default=0)
     readback.add_argument("--min-mention", type=int, default=0)
+    readback.add_argument("--min-file", type=int, default=0, help="attached file cards, e.g. a .sql verification query")
     try:
         args = parser.parse_args(argv)
         path = args.config or os.environ.get("FACTORY_CONFIG")
@@ -191,13 +194,15 @@ def main(argv=None):
             mentions = found["nodes"].get("mention", 0)
             if len(found["media"]) < args.min_media:
                 failures.append({"rule": "media", "examples": [f"{len(found['media'])} < {args.min_media}"]})
+            if len(found["files"]) < args.min_file:
+                failures.append({"rule": "file", "examples": [f"{len(found['files'])} < {args.min_file}"]})
             if mentions < args.min_mention:
                 failures.append({"rule": "mention", "examples": [f"{mentions} < {args.min_mention}"]})
     except (InputError, OSError, re.error, ValueError) as error:
         print(json.dumps({"check": "comment", "status": "FAIL", "error": str(error)}, ensure_ascii=False))
         return 2
     report = {"check": "comment", "status": "FAIL" if failures else "PASS", **meta,
-              "media": len(found["media"]), "mentions": found["nodes"].get("mention", 0), "failures": failures}
+              "media": len(found["media"]), "files": len(found["files"]), "mentions": found["nodes"].get("mention", 0), "failures": failures}
     print(json.dumps(report, ensure_ascii=False))
     return 1 if failures else 0
 
