@@ -161,6 +161,36 @@ author announced filing the ticket themselves or a non-release-tracker ticket
 was linked after the comment; ask by decision page when it is unclear whether
 the comment reports a problem. The next intake scan picks up the new ticket.
 
+## Ticket comments
+
+Ticket comments and descriptions are for planners and QA. Write them in the
+requester's words: what was asked and where it stands, a request → result
+table, before/after screen captures of the working behaviour (data captures
+when needed), how to check it, and any decision needed. Mention the requester.
+Queries, flow charts, commits, branches, builds, test counts, file and code
+names go to the developer note adapter, one note per ticket and one note entry
+per ticket comment, never the ticket. Rewrite instead of quoting developer text.
+
+Gate every post twice with `factory.comment_check`:
+
+```bash
+python3 -m factory.comment_check --config CONFIG lint comment.adf.json   # before posting
+ADAPTER_VIEW_JSON | python3 -m factory.comment_check --config CONFIG readback --comment ID --min-media 1 --min-mention 1
+```
+
+`lint` accepts the converted document (ADF JSON) or the markdown source;
+`readback` takes the tracker view with `fields.comment.comments` (or
+`fields.description` with `--description`, which drops the length cap). Exit 0
+is required: 1 lists failures (developer terms, code names, commit hashes,
+build numbers, branches, code blocks or inline code, unconverted markdown/JSON,
+comment-id references, over 800 characters, missing media or mention), 2 is
+invalid input. Fix the wording and repost; never pass a failure with `--allow`
+unless the term is confirmed planner vocabulary. A posted comment that fails
+read-back is not done: edit it in place. Without a working-behaviour capture,
+do not post a result; record why and wait for the environment or a human.
+`[comments]` in the config adds locale `terms`, `allow`ed words, extra named
+`patterns`, and `max_chars`.
+
 ## Local state
 
 `running.json` holds started_at/token/mode and liveness bookkeeping, including

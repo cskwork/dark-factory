@@ -93,6 +93,15 @@ scan_cmd = ["python3", "adapters/intake.py"]
 # Optional trusted argv adapter. Empty disables notifications; no shell is used.
 cmd = [] # e.g. ["python3", "adapters/notify.py", "{message}"]
 
+# Planner-readable ticket comments (factory.comment_check). Defaults cover English
+# developer terms; add locale terms the planners would not read.
+[comments]
+max_chars = 800
+terms = [] # e.g. ["쿼리", "커밋", "빌드", "브랜치"]
+allow = []
+[comments.patterns] # name = regex, reported like built-in rules
+# repository = '\bmy-service-(?:api|web)\b'
+
 [triage]
 mode = "shadow"
 classifier_cmd = [] # Optional adapter reads {events:[...]} on stdin, returns predictions.
