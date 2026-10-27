@@ -167,9 +167,12 @@ Ticket comments and descriptions are for planners and QA. Write them in the
 requester's words: what was asked and where it stands, a request → result
 table, before/after screen captures of the working behaviour (data captures
 when needed), how to check it, and any decision needed. Mention the requester.
-A read-only verification query a developer can run goes on the same comment as
-an attached `.sql` file card (mediaGroup), never pasted into the body; its top
-`--` comment says what it checks, the pass condition and the environment.
+Every result comment carries a read-only verification query a developer can
+run, attached to the same comment as a `.sql` file card (mediaGroup), never
+pasted into the body. Run it on the non-production environment first and attach
+it only after it returns the expected result; its top `--` comment says what it
+checks, the pass condition and the environment. Questions and intake replies
+that report no result are exempt.
 Write/rollback SQL, flow charts, commits, branches, builds, test counts, file
 and code names go to the developer note adapter, one note per ticket and one
 note entry per ticket comment, never the ticket. Rewrite instead of quoting
@@ -179,7 +182,7 @@ Gate every post twice with `factory.comment_check`:
 
 ```bash
 python3 -m factory.comment_check --config CONFIG lint comment.adf.json   # before posting
-ADAPTER_VIEW_JSON | python3 -m factory.comment_check --config CONFIG readback --comment ID --min-media 1 --min-mention 1
+ADAPTER_VIEW_JSON | python3 -m factory.comment_check --config CONFIG readback --comment ID --min-media 1 --min-mention 1 --min-file 1   # result comment
 ```
 
 `lint` accepts the converted document (ADF JSON) or the markdown source;

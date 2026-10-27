@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Every result comment attaches the developer verification query as a `.sql` file card (run on non-production first); the result read-back uses `--min-file 1`. Questions and intake replies are exempt.
+
 ## 0.4.0 - 2026-10-27
 
 - Read-only verification queries a developer can run are attached to the ticket comment as a `.sql` file card instead of being pasted into the body; write/rollback SQL stays in the developer note. `factory.comment_check` counts file cards (mediaGroup) separately from inline images and adds `readback --min-file`.
