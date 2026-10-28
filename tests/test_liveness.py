@@ -72,6 +72,57 @@ class LivenessTests(Fixture):
         self.assertTrue((self.state / "runs/old/lost").exists())
         self.assertFalse((self.state / "runs/old/ended").exists())
 
+    def test_release_with_error_worker_marks_ended(self):
+        self.running()
+        self.rows = [{"id": "worker", "status": "error", "key": "PROJ-123"}]
+        guard(self.cfg, release=True, token="old")
+        self.assertTrue((self.state / "runs/old/ended").exists())
+        self.assertFalse((self.state / "runs/old/lost").exists())
+
+    def test_error_owner_reclaimed_without_running_workers(self):
+        self.running()
+        self.rows = [{"id": "worker", "status": "error", "key": "PROJ-123"}]
+        self.owner = {"Status": "error", "Archived": False}
+        _, run = guard(self.cfg, manual=True)
+        self.assertIsNotNone(run)
+        self.assertNotEqual(run["token"], "old")
+        self.assertTrue((self.state / "runs/old/lost").exists())
+
+    def test_running_worker_keeps_error_owner_lock(self):
+        self.running()
+        self.rows = [{"id": "worker", "status": "running", "key": "PROJ-123"}]
+        self.owner = {"Status": "error", "Archived": False}
+        self.assertIsNone(guard(self.cfg, manual=True)[1])
+        self.assertEqual(self.read("running.json")["token"], "old")
+
+    def test_error_worker_recovery_keeps_key_blocked_until_reconciled(self):
+        self.marker()
+        self.running(token="current")
+        self.rows = [{"id": "worker", "status": "error", "key": "PROJ-123"}]
+        self.assertEqual(reconcile_reasons(self.cfg), ["reconcile:old"])
+        self.assertEqual(blocked_keys(self.cfg, "current"), {"PROJ-123"})
+        result = recover_run(self.cfg, "old", "current")
+        self.assertFalse(result["running"])
+        self.assertFalse(result["reconciled"])
+        self.assertEqual((self.state / "runs/old/worker.recovered.txt").read_text(), "saved log")
+        self.assertFalse((self.state / "runs/old/ended").exists())
+        self.assertTrue(reconcile_run(self.cfg, "old", "current"))
+        self.assertEqual(blocked_keys(self.cfg, "current"), set())
+
+    def test_error_worker_archival_requires_ended_run(self):
+        self.marker()
+        self.rows = [{"id": "worker", "status": "error", "archived": False}]
+        self.assertEqual(archive_finished(self.cfg), (0, 0))
+        self.marker(name="ended")
+        self.assertEqual(archive_finished(self.cfg), (1, 0))
+        self.assertEqual([op[-1] for op in self.operations if op[1] == "archive"], ["worker"])
+
+    def test_unknown_agent_status_still_blocks_recovery(self):
+        self.marker()
+        self.rows = [{"id": "worker", "status": "unknown", "key": "PROJ-123"}]
+        self.assertEqual(reconcile_reasons(self.cfg), [])
+        self.assertEqual(blocked_keys(self.cfg, "current"), {"*"})
+
     def test_failed_release_query_keeps_recovery_marker(self):
         self.running()
         self.fail = True

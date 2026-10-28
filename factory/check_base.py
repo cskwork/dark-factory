@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import subprocess
 
-from .config import load_config
+from .config import StateDirectoryError, load_config
 
 
 TIMEOUT_SECONDS = 30
@@ -139,7 +139,7 @@ def main(argv=None):
         report.update(branch=args.branch, key=args.key)
         code = check(args, report, load_config(args.config))
     except (ValueError, OSError, KeyError, TypeError) as error:
-        report["error"] = str(error) if isinstance(error, CheckError) else "invalid-config"
+        report["error"] = str(error) if isinstance(error, (CheckError, StateDirectoryError)) else "invalid-config"
         code = 2
     report["status"] = "PASS" if code == 0 else "FAIL"
     print(json.dumps(report, ensure_ascii=False))

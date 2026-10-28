@@ -10,8 +10,8 @@ import subprocess
 import sys
 import time
 import uuid
-from .config import load_config
-from .idle import decide
+from .config import StateDirectoryError, load_config
+from .idle import decide, pending_focus
 from .state import append_json, locked, read_object, write_json
 
 
@@ -78,7 +78,7 @@ def agents(cfg, token, key=None, archived=True, strict=True):
     if not isinstance(value, list):
         raise ValueError("invalid agent list")
     fields = settings.get("fields", {})
-    status_map = {"running": "running", "idle": "idle", "closed": "closed",
+    status_map = {"running": "running", "idle": "idle", "closed": "closed", "error": "error",
                   "finished": "closed", "completed": "closed", **settings.get("status_map", {})}
     rows = []
     for row in value:
@@ -92,7 +92,7 @@ def agents(cfg, token, key=None, archived=True, strict=True):
             labels = dict(label.split("=", 1) for label in labels if isinstance(label, str) and "=" in label)
         if not strict and status is None:
             continue
-        if not isinstance(identity, str) or not identity or status not in ("running", "idle", "closed") or (is_archived is not None and type(is_archived) is not bool):
+        if not isinstance(identity, str) or not identity or status not in ("running", "idle", "closed", "error") or (is_archived is not None and type(is_archived) is not bool):
             raise ValueError("invalid agent fields")
         if not isinstance(labels, dict):
             raise ValueError("invalid agent labels")
@@ -196,9 +196,9 @@ def _busy(cfg, current, now):
             status = _field(owner, fields.get("inspect_status", fields.get("status", "Status")))
             status = settings.get("status_map", {}).get(status, status)
             archived = _field(owner, fields.get("inspect_archived", fields.get("archived", "Archived")))
-            if status not in ("running", "idle", "closed") or type(archived) is not bool:
+            if status not in ("running", "idle", "closed", "error") or type(archived) is not bool:
                 raise ValueError("invalid owner inspection")
-            if archived or status == "closed":
+            if archived or status in ("closed", "error"):
                 reclaim = True
             elif status == "idle":
                 current.setdefault("noLiveSince", now)
@@ -289,8 +289,8 @@ def guard(cfg, manual=False, release=False, token=None, force=False):
         recovered = reconcile_reasons(cfg)
         last = read_object(cfg.state_dir / "last-wake.json")
         pending = cfg.state_dir / "pending-focus.jsonl"
-        pending_focus = pending.exists() and bool(pending.read_text().strip())
-        if not manual and not recovered and not pending_focus and last and now - last["at"] < cfg.get("duplicate_window_seconds", 1500):
+        has_pending_focus = pending.exists() and bool(pending.read_text().strip())
+        if not manual and not recovered and not has_pending_focus and last and now - last["at"] < cfg.get("duplicate_window_seconds", 1500):
             write_json(cfg.state_dir / "guard-last.json", {"at": now, "reasons": ["duplicate-window"], "queue": {}})
             return "factory-guard: skipping duplicate (window)", None
         today = cfg.state_dir / "done-today"
@@ -314,6 +314,9 @@ def guard(cfg, manual=False, release=False, token=None, force=False):
                 except OSError:
                     pass  # A failed evidence write cannot establish a safe idle skip.
         else:
+            blocked = blocked_keys(cfg)
+            decision["blockedKeys"] = sorted(blocked)
+            _, decision["blockedPendingKeys"] = pending_focus(cfg, blocked)
             write_json(cfg.state_dir / "guard-last.json", decision)
         # Keep this invocation's reasons even if another guard subsequently skips.
         run = {"started_at": now, "token": uuid.uuid4().hex, "mode": mode, "reasons": decision["reasons"],
@@ -596,6 +599,9 @@ def main(argv=None):
         if len(args.args) not in (3, 4):
             parser.error("worker requires ROLE TITLE BRIEF [TIMEOUT]")
         return worker(cfg, *args.args, token=args.token, key=args.key, unit=args.unit)
+    except StateDirectoryError as error:
+        print(json.dumps({"error": str(error)}))
+        return 1 if args.kind == "guard" and args.owns is not None else 2
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
         if args.kind == "guard" and args.owns is not None:
             return 1

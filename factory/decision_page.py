@@ -30,7 +30,7 @@ from urllib.parse import parse_qs, urlparse
 import webbrowser
 
 from . import sql_runner
-from .config import load_config
+from .config import StateDirectoryError, load_config
 
 
 class DecisionRefused(ValueError):
@@ -378,7 +378,10 @@ def main(argv=None):
     parser.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--request", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except StateDirectoryError as error:
+        parser.error(str(error))
     if args.timeout <= 0:
         parser.error("timeout must be positive")
     spec = json.loads(Path(args.spec).read_text()) if args.spec else {}

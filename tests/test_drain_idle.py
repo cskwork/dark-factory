@@ -1,8 +1,10 @@
 """Deferrals require real worker progress; backoff applies to individual items."""
+from datetime import date
 import time
 from unittest.mock import patch
 from factory import idle
 from factory.drain import iso
+from factory.runtime import guard
 from factory.state import BOOKKEEPING, item_digest, patch as patch_state
 from support import Fixture, event
 
@@ -120,6 +122,71 @@ class DrainIdleTests(Fixture):
         self.assertEqual(code, 1)
         self.assertIn("pending-focus", result["reasons"])
         self.assertIn("scan-failed", result["reasons"])
+
+    def test_all_blocked_pending_focus_is_report_only_and_preserved(self):
+        pending = self.state / "pending-focus.jsonl"
+        snapshot = '{"key":"PROJ-1"}\n{"focus":"PROJ-2"}\n'
+        pending.write_text(snapshot)
+        with patch("factory.runtime.blocked_keys", return_value={"PROJ-1", "PROJ-2"}):
+            result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 0)
+        self.assertNotIn("pending-focus", result["reasons"])
+        self.assertEqual(result["blockedPendingKeys"], ["PROJ-1", "PROJ-2"])
+        self.assertEqual(self.read("guard-last.json")["blockedPendingKeys"], ["PROJ-1", "PROJ-2"])
+        self.assertEqual(pending.read_text(), snapshot)
+
+    def test_wildcard_block_reports_actual_pending_keys_without_waking(self):
+        (self.state / "pending-focus.jsonl").write_text('{"key":"PROJ-1"}\n')
+        with patch("factory.runtime.blocked_keys", return_value={"*"}):
+            result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["blockedKeys"], ["*"])
+        self.assertEqual(result["blockedPendingKeys"], ["PROJ-1"])
+
+    def test_one_unblocked_pending_key_still_wakes(self):
+        (self.state / "pending-focus.jsonl").write_text('{"key":"PROJ-1"}\n{"key":"PROJ-2"}\n')
+        with patch("factory.runtime.blocked_keys", return_value={"PROJ-1"}):
+            result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 1)
+        self.assertIn("pending-focus", result["reasons"])
+        self.assertEqual(result["blockedPendingKeys"], ["PROJ-1"])
+
+    def test_unscoped_request_still_wakes_alongside_blocked_pending_key(self):
+        (self.state / "pending-focus.jsonl").write_text('{"key":"PROJ-1"}\n{}\n')
+        with patch("factory.runtime.blocked_keys", return_value={"*"}):
+            result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 1)
+        self.assertIn("pending-focus", result["reasons"])
+        self.assertEqual(result["blockedPendingKeys"], ["PROJ-1"])
+
+    def test_invalid_pending_focus_is_explicit_error(self):
+        for content in ('not json\n', '[]\n', '{"key":42}\n'):
+            with self.subTest(content=content):
+                (self.state / "pending-focus.jsonl").write_text(content)
+                result, code = idle.decide(self.cfg)
+                self.assertEqual(code, 2)
+                self.assertIn("internal-error", result["reasons"])
+
+    def test_tick_guard_reports_blocked_pending_without_launching(self):
+        (self.state / "done-today").write_text(date.today().isoformat())
+        self.write("last-wake.json", {"at": self.now})
+        (self.state / "pending-focus.jsonl").write_text('{"key":"PROJ-1"}\n')
+        with patch("factory.runtime.blocked_keys", return_value={"PROJ-1"}):
+            message, run = guard(self.cfg)
+        self.assertIsNone(run)
+        self.assertIn("idle", message)
+        self.assertEqual(self.read("guard-last.json")["blockedPendingKeys"], ["PROJ-1"])
+        self.assertEqual(self.read("idle.json")["blockedPendingKeys"], ["PROJ-1"])
+        self.assertFalse((self.state / "running.json").exists())
+
+    def test_morning_guard_surfaces_blocked_pending_for_report(self):
+        (self.state / "pending-focus.jsonl").write_text('{"key":"PROJ-1"}\n')
+        with patch("factory.runtime.blocked_keys", return_value={"PROJ-1"}):
+            _, run = guard(self.cfg)
+        self.assertIsNotNone(run)
+        self.assertEqual(run["mode"], "morning")
+        self.assertEqual(self.read("guard-last.json")["blockedKeys"], ["PROJ-1"])
+        self.assertEqual(self.read("guard-last.json")["blockedPendingKeys"], ["PROJ-1"])
 
     def test_expired_backoff_runnable_and_prior_hash_preserved_during_backoff(self):
         self.write("queue.json", {"PROJ-1": {"waiting": None, "backoffUntil": iso(self.now - 1)}})

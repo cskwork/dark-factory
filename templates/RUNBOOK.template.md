@@ -105,7 +105,8 @@ A list returns raw JSON rows or `{"agents":[...]}`;
 `list_field` selects another dotted collection path. `launcher.fields` maps
 `id`, `status`, `archived`, `labels`, `key`, `inspect_status`, and
 `inspect_archived` to dotted JSON fields. `status_map` maps external values to
-running/idle/closed. Inspection must supply a trustworthy archived flag and
+running/idle/closed/error. Treat error as finished for liveness and recovery,
+never as proof of successful work. Inspection must supply a trustworthy archived flag and
 status; list status alone cannot establish whether an owner was archived.
 The example shows a Paseo mapping; adapters for other launchers follow the same
 contract. Commands never pass through a shell.
@@ -214,7 +215,7 @@ write. A human may use `factory-guard --release --force` only after checking
 surviving agents. No worker owns or releases the lock.
 
 A running token agent keeps the lock. With no running token agents, an archived
-or closed inspected owner is reclaimed immediately; an idle owner requires
+or closed/error inspected owner is reclaimed immediately; an idle owner requires
 25 minutes continuously without live agents. A missing orchestrator ID has a
 10-minute launch grace period. Query failures keep the lock. Three consecutive
 query failures or age over 6 hours generates one liveness alert and journal entry.
@@ -258,7 +259,8 @@ on corruption. Journal/lessons writes are one append-only line, never rewrites.
 
 `scan.json` is the latest successful triaged scan; failed scans remove it.
 `idle.json` records the sanitized guard result. `guard-last.json` contains at,
-reasons, queue, stuck, and waitingHuman; guard-state.json stores hashes/counts and
+reasons, queue, stuck, waitingHuman, blockedKeys, and blockedPendingKeys;
+guard-state.json stores hashes/counts and
 notification deduplication. `notify.cmd` receives one `{message}` argument.
 Human waits are grouped and notified once per distinct group per local day.
 Notification failure is recorded without changing the work decision.
@@ -288,12 +290,18 @@ Use `python3 -m factory.drain --config CONFIG --token TOKEN COMMAND`:
 Refresh intake before every next runtime unit; process new events sequentially
 first. Runtime work never overlaps. Stop at a stage boundary if budget is short.
 Per-item rate limits wait 30, 60, then 120 minutes (capped at 120); exclude only
-that item from runnable/stuck checks until its backoffUntil. New events, pending
-focus, and other items continue to wake the line.
+that item from runnable/stuck checks until its backoffUntil. New events, unblocked
+pending focus, and other items continue to wake the line.
 
 Focused manual wakes blocked by a lock append to pending-focus.jsonl. Decision
 page wakes use the same path and retain their decision markers. Any nonempty
-pending-focus file prevents idle. After actually processing a request, use
+pending-focus file prevents idle only when it contains an unblocked key or an
+unscoped manual request. When all pending keys are blocked by unreconciled runs,
+keep the requests and report blockedPendingKeys without waking solely for them.
+Morning/status reports must include `needs-action: blocked pending focus: KEYS`
+from the current guard result. A `*` in blockedKeys means a launcher query failed;
+report ownership as unknown rather than assuming a specific lost run.
+After actually processing a request, use
 `python3 -m factory.state --config CONFIG consume-pending --lines JSON_LINES`
 with only the snapshot lines handled. Duplicate/concurrent lines are preserved
 by count. Never truncate the entire file.

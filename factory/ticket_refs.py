@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 
 from .check_base import CheckError, Parser, git, is_ancestor, marker, repo_path, resolve, valid_key
-from .config import load_config
+from .config import StateDirectoryError, load_config
 
 
 def remote_prefix(base):
@@ -105,7 +105,7 @@ def main(argv=None):
         report.update(status=status, repos=found)
         code = 0 if found else 1
     except (ValueError, OSError, KeyError, TypeError) as error:
-        report["error"] = str(error) if isinstance(error, CheckError) else "invalid-config"
+        report["error"] = str(error) if isinstance(error, (CheckError, StateDirectoryError)) else "invalid-config"
         code = 2
     print(json.dumps(report, ensure_ascii=False))
     return code

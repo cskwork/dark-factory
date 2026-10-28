@@ -4,6 +4,13 @@
 
 - Every result comment attaches the developer verification query as a `.sql` file card (run on non-production first); the result read-back uses `--min-file 1`. Questions and intake replies are exempt.
 
+## 0.5.0 - 2026-10-28
+
+- Treat launcher `error` status as finished for owner liveness, lost-run recovery, release, and ended-only archival; keys remain blocked until reconciliation verifies the actual outcome.
+- Keep pending focus for blocked keys report-only instead of repeatedly waking the orchestrator; include the blocked pending keys in guard evidence and morning/status reports.
+- Reject empty or filesystem-root `state_dir` configuration before CLI state access, including paths that resolve to `/`, with explicit errors.
+- Port the applicable 2026-10-28 retrospective fixes and cover recovery, pending focus, and directory validation with offline regression tests.
+
 ## 0.4.0 - 2026-10-27
 
 - Read-only verification queries a developer can run are attached to the ticket comment as a `.sql` file card instead of being pasted into the body; write/rollback SQL stays in the developer note. `factory.comment_check` counts file cards (mediaGroup) separately from inline images and adds `readback --min-file`.

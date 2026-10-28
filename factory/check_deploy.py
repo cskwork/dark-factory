@@ -6,7 +6,7 @@ import re
 import subprocess
 
 from .check_base import CheckError, Parser, is_ancestor, repo_path, resolve
-from .config import load_config
+from .config import StateDirectoryError, load_config
 
 
 MAX_JSON_BYTES = 8 * 1024 * 1024
@@ -118,7 +118,7 @@ def main(argv=None):
             raise CheckError("invalid-arguments")
         code, reason = check(args, report, load_config(args.config))
     except (ValueError, OSError, KeyError, TypeError) as error:
-        code, reason = 2, str(error) if isinstance(error, CheckError) else "invalid-config"
+        code, reason = 2, str(error) if isinstance(error, (CheckError, StateDirectoryError)) else "invalid-config"
     report.update(status="PASS" if code == 0 else "FAIL", reason=reason)
     print(json.dumps(report, ensure_ascii=False))
     return code

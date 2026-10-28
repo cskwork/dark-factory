@@ -13,7 +13,7 @@ from pathlib import Path
 import re
 
 from .check_base import git as git_command
-from .config import load_config
+from .config import StateDirectoryError, load_config
 from .sql_runner import SQLRefused, _validate, statements
 
 
@@ -450,7 +450,7 @@ def main(argv=None):
         report, code = check(load_config(args.config), repo=args.repo, base=args.base, head=args.head)
     except Exception as error:
         report = {"check": "migrations", "status": "ERROR", "reason": str(error)
-                  if isinstance(error, ReportableError) else "invalid-config"}
+                  if isinstance(error, (ReportableError, StateDirectoryError)) else "invalid-config"}
         code = 10
     print(json.dumps(report, ensure_ascii=False))
     return code

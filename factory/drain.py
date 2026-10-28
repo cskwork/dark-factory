@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import sys
 import time
-from .config import load_config
+from .config import StateDirectoryError, load_config
 from .state import BOOKKEEPING, item_digest, locked, read_object, transaction
 
 
@@ -344,6 +344,9 @@ def main(argv=None):
     except PermissionError:
         print("drain: run ownership lost", file=sys.stderr)
         return 1
+    except StateDirectoryError as error:
+        print("drain: " + str(error), file=sys.stderr)
+        return 2
     except (OSError, ValueError, TypeError, KeyError):
         print("drain: invalid state or arguments", file=sys.stderr)
         return 2

@@ -151,7 +151,7 @@ def append_json(path, value):
 
 
 def main(argv=None):
-    from .config import load_config
+    from .config import StateDirectoryError, load_config
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--config", default=argparse.SUPPRESS)
     parser = argparse.ArgumentParser(description=__doc__, parents=[common])
@@ -179,6 +179,9 @@ def main(argv=None):
         else:
             print(consume_pending(directory, args.lines))
         return 0
+    except StateDirectoryError as error:
+        print("state: " + str(error), file=sys.stderr)
+        return 1
     except (OSError, ValueError, TypeError):
         print("state: invalid state or arguments", file=sys.stderr)
         return 1

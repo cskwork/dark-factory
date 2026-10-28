@@ -87,9 +87,9 @@ Worker failures, verifier failures, review rejections, new human waits, and revi
 
 Use `python3 -m factory.state --config CONFIG patch queue.json --path '["PROJ-123"]' --json '{"stage":"build","waiting":null}'` for key-level updates. The same command updates `state.json` and `approvals.json`, preserving other keys under `.state.lock`. Do not read and rewrite entire shared objects in a worker. JSONL evidence is append-only.
 
-The orchestrator uses `python3 -m factory.drain --config CONFIG --token TOKEN` for budget, ranking, summaries, deferrals, and per-item rate-limit backoff. The [runbook](templates/RUNBOOK.template.md) specifies the full loop and recovery procedure. Deferred items avoid the stuck backstop only when the previous run did useful worker work; **4 consecutive deferrals** still count as stuck. Rate limits back off only that item for **30, 60, then 120 minutes**, capped at **120 minutes**. New events and pending focus still wake the line.
+The orchestrator uses `python3 -m factory.drain --config CONFIG --token TOKEN` for budget, ranking, summaries, deferrals, and per-item rate-limit backoff. The [runbook](templates/RUNBOOK.template.md) specifies the full loop and recovery procedure. Deferred items avoid the stuck backstop only when the previous run did useful worker work; **4 consecutive deferrals** still count as stuck. Rate limits back off only that item for **30, 60, then 120 minutes**, capped at **120 minutes**. New events and unblocked pending focus still wake the line.
 
-Manual focused wakes blocked by an existing lock persist in `pending-focus.jsonl`. Consume only the lines actually handled, through the state command, so concurrent requests survive.
+Manual focused wakes blocked by an existing lock persist in `pending-focus.jsonl`. If all pending keys belong to unreconciled runs, the guard reports `blockedPendingKeys` without waking solely for those requests; morning/status reports list the keys needing action. Consume only the lines actually handled, through the state command, so concurrent requests survive.
 
 ## License
 

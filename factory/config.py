@@ -7,12 +7,21 @@ import subprocess
 import tomllib
 
 
+class StateDirectoryError(ValueError):
+    """Unsafe state directory supplied by configuration."""
+
+
 class Config:
     def __init__(self, data, path):
         self.data = data
         self.path = Path(path).expanduser().resolve()
         self.project_root = self.resolve(data.get("project_root", "."), self.path.parent)
-        self.state_dir = self.resolve(data.get("state_dir", ".factory"), self.project_root)
+        state_dir = data.get("state_dir", ".factory")
+        if isinstance(state_dir, str) and not state_dir.strip():
+            raise StateDirectoryError("invalid state_dir: must not be empty or whitespace")
+        self.state_dir = self.resolve(state_dir, self.project_root)
+        if self.state_dir == self.state_dir.parent:
+            raise StateDirectoryError("invalid state_dir: must not resolve to the filesystem root")
         re.compile(self.get("key_pattern", r"[A-Z][A-Z0-9]+-\d+"))
         for name in ("duplicate_window_seconds", "lock_stale_seconds"):
             value = self.get(name, 1500 if name.startswith("duplicate") else 10800)

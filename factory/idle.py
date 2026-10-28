@@ -5,7 +5,7 @@ import hashlib
 import json
 import subprocess
 import time
-from .config import load_config
+from .config import StateDirectoryError, load_config
 from .state import BOOKKEEPING, append_json, item_digest, read_object, transaction, write_json
 from .drain import backoff_active, epoch
 from .triage import triage
@@ -56,6 +56,26 @@ def notify(cfg, message):
         return "failed"
 
 
+def pending_focus(cfg, blocked):
+    """Keep blocked requests for reporting; unscoped manual requests still wake."""
+    path = cfg.state_dir / "pending-focus.jsonl"
+    runnable, blocked_pending = False, set()
+    for line in path.read_text().splitlines() if path.exists() else []:
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        if not isinstance(row, dict):
+            raise ValueError("invalid pending focus")
+        key = row.get("key", row.get("focus"))
+        if key is not None and not cfg.valid_key(key):
+            raise ValueError("invalid pending focus key")
+        if key is not None and ("*" in blocked or key in blocked):
+            blocked_pending.add(key)
+        else:
+            runnable = True
+    return runnable, sorted(blocked_pending)
+
+
 def decide(cfg, classifier=None):
     result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": []}
     now = time.time()
@@ -65,8 +85,8 @@ def decide(cfg, classifier=None):
         from .runtime import blocked_keys
         blocked = blocked_keys(cfg)
         result["blockedKeys"] = sorted(blocked)
-        pending = cfg.state_dir / "pending-focus.jsonl"
-        if pending.exists() and pending.read_text().strip():
+        runnable_focus, result["blockedPendingKeys"] = pending_focus(cfg, blocked)
+        if runnable_focus:
             reasons.append("pending-focus")
         # Always use this invocation's stdout; an old empty scan is never evidence.
         (cfg.state_dir / "scan.json").unlink(missing_ok=True)
@@ -236,6 +256,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         result, code = decide(load_config(args.config))
+    except StateDirectoryError as error:
+        result, code = {"idle": False, "reasons": ["invalid-config"], "error": str(error)}, 2
     except (OSError, ValueError):
         result, code = {"idle": False, "reasons": ["invalid-config"]}, 2
     print(json.dumps(result))
