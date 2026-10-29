@@ -387,7 +387,13 @@ outcome, malformed data included, clears the marker. `guard-last.json` exposes
 sourceHealth, shouldWake, scan/triage/preflight timings. Monitoring-only failure
 or cooldown skips the orchestrator with an explicit unavailable/degraded
 message and idle=false; actual work, approvals, pending focus and recovery
-still wake. Malformed data and internal errors remain failures.
+still wake. Malformed data and internal errors remain wake-worthy failures, and they are
+counted: a broken payload records `scan-malformed` (any other error `scan-error`) with no
+cooldown, so the next tick still scans. The whole payload contract, events included, is
+checked inside the scan, so a breached event is counted like unparseable JSON. Three
+consecutive failures of any kind append one `infra_fail` lesson and send one notification;
+`alerted` in `scan-state.json` deduplicates it, and a healthy scan clears `alerted` and
+failureCount together. A failed failure-record write never replaces the original error.
 `python3 -m factory.idle --config CONFIG --force-refresh` forces a new scan;
 `factory-guard` and `factory-wake` accept the same flag, bypassing the duplicate
 window for tick scans. A running lock still takes precedence.

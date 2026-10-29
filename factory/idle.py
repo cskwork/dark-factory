@@ -80,6 +80,7 @@ def pending_focus(cfg, blocked):
 
 
 SCAN_RETRY_PAUSE = 3
+SCAN_ALERT_FAILURES = 3
 
 
 def scan_budget(cfg):
@@ -92,11 +93,22 @@ def scan_budget(cfg):
     return float(budget)
 
 
-def record_scan_failure(cfg, state, now, count, failure, elapsed):
+def record_scan_failure(cfg, state, now, count, failure, elapsed, cooldown=True):
+    """Count every observed scan failure; only a command failure may cool the adapter down."""
     state.setdefault("lastSuccessAt", None)
-    state.update(status="unavailable", failureCount=count + 1, lastErrorAt=now,
-                 lastError=failure, retryAt=now + (1800 if count == 0 else 3600),
-                 durationSeconds=elapsed, cooldown=False, attemptStartedAt=None)
+    ladder = now + (1800 if count == 0 else 3600)
+    state.update(status="unavailable", failureCount=count + 1, lastErrorAt=now, lastError=failure,
+                 retryAt=ladder if cooldown else None, durationSeconds=elapsed,
+                 cooldown=False, attemptStartedAt=None)
+    if state["failureCount"] >= SCAN_ALERT_FAILURES and not state.get("alerted"):
+        append_json(cfg.state_dir / "lessons.jsonl", {
+            "at": now, "key": None, "kind": "infra_fail",
+            "observation": "Intake scan failed " + str(state["failureCount"]) + " times in a row: " + failure,
+            "evidence": str(cfg.state_dir / "scan-state.json"),
+            "proposal": "Repair the intake adapter, then scan with --force-refresh"})
+        state["alert"] = notify(cfg, "Intake scan unavailable: " + failure
+                                + " (" + str(state["failureCount"]) + " in a row)")
+        state["alerted"] = True
     write_json(cfg.state_dir / "scan-state.json", state)
     return state
 
@@ -186,9 +198,16 @@ def scan_intake(cfg, now, force_refresh=False):
             return None, record_scan_failure(cfg, state, now, count, failure, elapsed), [failure]
         if not isinstance(scan, dict) or not isinstance(scan.get("events"), list) or not isinstance(scan.get("errors"), list):
             raise ValueError("invalid scan")
+        for event in scan["events"]:
+            if (not isinstance(event, dict) or not cfg.valid_key(event.get("key"))
+                    or not isinstance(event.get("id"), str) or not event["id"]
+                    or not all(isinstance(event.get(name), str) for name in ("author", "text"))
+                    or not all(type(event.get(name)) is bool for name in
+                               ("mentions_me", "assigned_to_me", "answered_by_me_after"))):
+                raise ValueError("invalid event")
         status = source_health(state, scan, now)
         state.update(status=status, failureCount=0, retryAt=None, durationSeconds=elapsed,
-                     cooldown=False, attemptStartedAt=None)
+                     cooldown=False, attemptStartedAt=None, alerted=False)
         if status == "available":
             state["lastSuccessAt"] = now
         else:
@@ -197,10 +216,16 @@ def scan_intake(cfg, now, force_refresh=False):
             state.setdefault(name, None)
         write_json(path, state)
         return scan, state, ([] if status == "available" else ["scan-errors"])
-    except Exception:
+    except Exception as error:
         # Any observed error resolves this attempt; only a killed process leaves the marker.
-        state["attemptStartedAt"] = None
-        write_json(path, state)
+        # Malformed data still wakes the orchestrator, so count it: otherwise a fast garbage
+        # response burns an expensive wake every tick with nothing recorded.
+        label = "scan-malformed" if isinstance(error, (ValueError, TypeError, KeyError)) else "scan-error"
+        try:
+            record_scan_failure(cfg, state, now, count, label,
+                                time.monotonic() - started, cooldown=False)
+        except OSError:
+            pass  # The original failure matters more than its bookkeeping.
         raise
 
 
@@ -224,13 +249,6 @@ def decide(cfg, classifier=None, force_refresh=False):
         reasons.extend(monitoring)
         scan_present = scan is not None
         scan = scan or {"events": [], "errors": []}
-        for event in scan["events"]:
-            if (not isinstance(event, dict) or not cfg.valid_key(event.get("key"))
-                    or not isinstance(event.get("id"), str) or not event["id"]
-                    or not all(isinstance(event.get(name), str) for name in ("author", "text"))
-                    or not all(type(event.get(name)) is bool for name in
-                               ("mentions_me", "assigned_to_me", "answered_by_me_after"))):
-                raise ValueError("invalid event")
         triage_started = time.monotonic()
         events = triage(cfg, scan["events"], classifier) if not scan["errors"] or "sources" in scan else []
         result["timings"]["triageSeconds"] = time.monotonic() - triage_started

@@ -1,7 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 - 2026-10-29
 
+- Count and alert on failed intake monitoring instead of only cooling it down: a malformed
+  payload records `scan-malformed` (any other error `scan-error`) without a cooldown, so it
+  stays a wake-worthy failure; the whole payload contract including events is now checked
+  inside the scan, so a breached event is counted like unparseable JSON; and three consecutive
+  failures of any kind append one `infra_fail` lesson and send one deduplicated notification,
+  both cleared by a healthy scan.
 - Retrospective improvements: optional per-source intake health separates unavailable monitoring
   from idle, whole-command scan failure cools the adapter down (`--force-refresh` bypasses it),
   worker attempts keep a unique checkpoint and `invocation.json` even on failure, caller
