@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import time
 
 from .check_base import CheckError, Parser
 from .config import StateDirectoryError, load_config
@@ -28,6 +29,7 @@ def _probe_order(probes, names):
 
 
 def check_environment(cfg, needs=None, fail_fast=False):
+    started_at = time.monotonic()
     settings = cfg.get("preflight", {})
     probes = settings.get("probes", {}) if isinstance(settings, dict) else None
     if not isinstance(probes, dict) or not probes:
@@ -66,6 +68,7 @@ def check_environment(cfg, needs=None, fail_fast=False):
             results.append(row)
             by_name[name] = row
             continue
+        started = time.monotonic()
         try:
             completed = cfg.run(probe["cmd"])
             code = completed.returncode
@@ -77,12 +80,14 @@ def check_environment(cfg, needs=None, fail_fast=False):
             code, status, reason = None, "HUMAN", "command-unavailable"
         row = {"name": name, "status": status, "exit_code": code, "reason": reason,
                "human_action": probe.get("human_action") if status == "HUMAN" else None}
+        row["durationSeconds"] = time.monotonic() - started
         results.append(row)
         by_name[name] = row
         stopped = fail_fast and status != "PASS"
     statuses = {row["status"] for row in results}
     status, code = ("HUMAN", 10) if "HUMAN" in statuses else (("DOWN", 20) if "DOWN" in statuses else ("PASS", 0))
-    return {"check": "preflight", "status": status, "results": results}, code
+    return {"check": "preflight", "status": status, "results": results,
+            "durationSeconds": time.monotonic() - started_at}, code
 
 
 def check(cfg, needs=None, fail_fast=False):

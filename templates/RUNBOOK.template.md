@@ -358,3 +358,111 @@ rolls back. Secrets belong in an ignored local config or connector, never a page
 Append `{at,key,observation,evidence,proposal}` to lessons.jsonl. Run the retro
 weekly to propose a reviewed improvement branch. Humans merge harness changes.
 All shipped tests are offline: `python3 -m unittest discover -s tests -v`.
+
+## Monitoring, completion evidence and observed measurements
+
+`scan.json` retains the events/errors contract. Adapters may add
+`"sources":{"jira":{"status":"available","durationSeconds":1.2},"chat":{"status":"unavailable","reason":"auth-required"}}`.
+Statuses are available/degraded/unavailable; reason is a sanitized identifier,
+never command output or credentials. Source durations are optional finite,
+nonnegative seconds; absent timing is null. `scan-state.json` preserves each
+source's lastSuccessAt/lastErrorAt/lastError separately from idle. Structured
+source failures allow healthy events through. Legacy errors still withhold
+that scan's events, but runnable queue items and approvals remain eligible.
+
+Only a whole scan-command failure applies adapter cooldown: the existing one
+retry after 3 seconds stays, then 1800 seconds, increasing to a 3600 second cap.
+Partial source failure never cools the whole adapter because no per-source
+selection interface exists. Successful invocation clears command failureCount;
+healthy-source recovery updates its success time.
+`intake.scan_budget_seconds` (default `command_timeout_seconds`) bounds one scan
+including its retry, and `command_timeout_seconds` still caps each attempt. The retry
+runs only while the budget still covers it, so a hanging adapter costs one budget
+instead of two timeouts; a timed-out command records `scan-timeout`.
+`scan-state.json` carries `attemptStartedAt` from before the command starts until an
+outcome is recorded. A tick killed inside its scan leaves that marker behind, and the
+next scan counts it as `scan-interrupted` on the same cooldown ladder before scanning
+again; without it the same hang returned every tick with failureCount 0. Every observed
+outcome, malformed data included, clears the marker. `guard-last.json` exposes
+sourceHealth, shouldWake, scan/triage/preflight timings. Monitoring-only failure
+or cooldown skips the orchestrator with an explicit unavailable/degraded
+message and idle=false; actual work, approvals, pending focus and recovery
+still wake. Malformed data and internal errors remain failures.
+`python3 -m factory.idle --config CONFIG --force-refresh` forces a new scan;
+`factory-guard` and `factory-wake` accept the same flag, bypassing the duplicate
+window for tick scans. A running lock still takes precedence.
+
+Workers receive a unique JSON-quoted checkpoint_path per attempt. Write exact
+worker-result JSON there after verification and before optional cleanup, and
+return the same seven-field JSON on stdout. Attempt directories retain stdout,
+stderr, validated checkpoint and invocation.json even for timeout/nonzero exit.
+The first legacy KEY-UNIT files stay intact; retries get new attempt paths.
+Use the current attempt result.json/stdout.txt for check-result, never a previous
+attempt's legacy file.
+A valid checkpoint is recovery evidence; nonzero exit/timeout still fails and
+never releases a live lock. Wrong-key or stale checkpoint files are rejected.
+
+> Write the result fields before optional cleanup (worktree removal, merge/* branch deletion). If a hook or permission denies a command, never retry it with another command that reaches the same effect (rm→unlink, branch -D→update-ref); record the denied command in summary, leave it for the orchestrator and finish.
+
+For declared completion, the orchestrator writes a requirements manifest before
+launch and passes `factory-worker ... --requirements REQUIREMENTS.json`.
+The wrapper snapshots the declaration before launch, so worker changes or
+removal of that file cannot waive the gate. Example:
+
+```json
+{"key":"PROJ-123","stage":"built","checks":[{"name":"runtime","artifact":"verify.json","resultField":"status","environment":{"environment":"dev","identity.host":"expected-host"}}]}
+```
+
+Artifact paths resolve relative to the manifest directory; field selectors are
+dot-separated JSON object paths. The caller supplies the expected key, stage,
+check names, verifier artifact, PASS result field and at least one exact
+non-null environment binding. A saved verifier might contain
+`{"status":"PASS","environment":"dev","identity":{"host":"expected-host"}}`.
+Required result checks retain `{name,result}` and must occur exactly once with
+PASS; declared artifacts must be listed in worker artifacts and contain PASS
+plus all matching environment values. Missing/FAIL/SKIP/duplicate checks,
+wrong key/stage/environment or unreadable evidence block completion. Gate JSON
+retains passedChecks and failures with retryAllowed=false on failure. Existing
+callers without a manifest retain their schema/behavior.
+
+Workers must not advance a declared queue stage. After the wrapper succeeds,
+the orchestrator independently runs `factory.drain ... check-result --key KEY
+--result RESULT --requirements REQUIREMENTS.json`, reads its gate JSON and only
+then patches that stage. Failure is exit 4; preserve all passing artifacts and
+keep the current stage. No low-level state machine is added; callers must use
+this gate before their declared transition. The wrapper and drain gate verify
+saved caller-declared evidence; they do not run or authenticate remote verifiers.
+
+Each actual wrapper attempt writes invocation.json with observed start/end,
+duration, exit/outcome, role/provider/model, source=factory-worker and unknown
+usage. Feed each attempt, including failures, once into the existing summary:
+
+```sh
+python3 -m factory.drain --config CONFIG --token TOKEN summary-record --invocation ATTEMPT/invocation.json --runtime --observations observations.json
+```
+
+`--observations` is optional. Its JSON maps any of tokens, costUsd, waitSeconds,
+humanInterventions, reworkCount to `{"value":NUMBER,"source":"EVIDENCE_PATH_OR_SYSTEM"}`.
+Values must be finite and nonnegative; counts must be integers. Record provider
+usage/billing exports only when actually available, timed waits from a recorded
+start/end, human interventions from explicit approval/action evidence, and
+rework from a documented redo of a failed unit. Polling, repeated stages and
+model estimates are not measurements. Never ask the worker to invent usage.
+Without actual evidence, omit the observation; unknown remains null.
+
+Legacy summary-record flags continue to work, with optional --stage and
+--observations. --invocation supplies key/unit/timing/workers/stage, preserving
+attempt provenance and outcome; do not also supply those identity flags.
+Summary recomputation is idempotent by key/unit/startedAt. Each metric gives
+knownSubtotal, knownUnits, unknownUnits; value is null until every unit is known.
+Unit records retain observation sources. durationSeconds sums unit time:
+--invocation preserves the wrapper's finite, nonnegative monotonic measurement,
+marked durationSource=factory-worker-monotonic; legacy explicit timestamps
+retain endedAt-startedAt. stages sums those same unit durations.
+wallElapsedSeconds spans run start through the latest unit end using wall-clock
+timestamps, including gaps. If any invocation's wall clock moved backwards,
+that wall span is null; its valid monotonic unit duration is still recorded.
+Unit time and wall span can differ for clock changes, gaps or overlapping
+historical records. stages groups unit
+time by declared/result stage, using unknown when absent. Neither total is a
+billing estimate or evidence of measured savings.

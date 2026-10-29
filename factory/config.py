@@ -60,10 +60,12 @@ class Config:
         # Split BEFORE formatting: spaces and shell metacharacters stay one argument.
         return [part.format_map(context) for part in parts]
 
-    def run(self, template, **values):
+    def run(self, template, *, timeout=None, **values):
+        # A caller may shorten a single command; it can never exceed the configured cap.
+        limit = self.get("command_timeout_seconds", 300)
         return subprocess.run(self.command(template, **values), cwd=self.project_root,
                               stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                              timeout=self.get("command_timeout_seconds", 300))
+                              timeout=limit if timeout is None else min(timeout, limit))
 
 
 def load_config(path=None):

@@ -91,6 +91,18 @@ The orchestrator uses `python3 -m factory.drain --config CONFIG --token TOKEN` f
 
 Manual focused wakes blocked by an existing lock persist in `pending-focus.jsonl`. If all pending keys belong to unreconciled runs, the guard reports `blockedPendingKeys` without waking solely for those requests; morning/status reports list the keys needing action. Consume only the lines actually handled, through the state command, so concurrent requests survive.
 
+Optional intake `sources` metadata separates unavailable monitoring from idle.
+Whole-command scan failures use bounded 1800/3600-second cooldown; partial
+source failures keep healthy intake running. Use --force-refresh to bypass
+cooldown. `intake.scan_budget_seconds` bounds one scan including its retry, and a
+tick killed inside its scan is counted as `scan-interrupted` by the next scan, so a
+hanging adapter cools down instead of burning every tick. Workers now retain unique pre-cleanup checkpoints and invocation
+records even on failure. Caller --requirements manifests gate declared stage
+completion against saved verifier JSON; old worker JSON stays unchanged.
+Summary --invocation/--observations records measured provenance, known coverage
+and unknown cost/tokens without estimates. See the runbook's “Monitoring,
+completion evidence and observed measurements” for contracts and CLI examples.
+
 ## License
 
 MIT

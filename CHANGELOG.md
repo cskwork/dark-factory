@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Retrospective improvements: optional per-source intake health separates unavailable monitoring
+  from idle, whole-command scan failure cools the adapter down (`--force-refresh` bypasses it),
+  worker attempts keep a unique checkpoint and `invocation.json` even on failure, caller
+  `--requirements` manifests gate a declared stage against saved verifier JSON, and
+  `summary-record --invocation/--observations` records measured cost and quality without estimates.
+- Bound intake scan wall time and count a scan that never finished: `intake.scan_budget_seconds`
+  covers one scan including its retry, each attempt stays under `command_timeout_seconds`, the
+  retry runs only while the budget covers it, and a tick killed inside its scan leaves
+  `attemptStartedAt` so the next scan records `scan-interrupted` and applies the cooldown ladder.
+  Previously a hang cost two command timeouts and recorded nothing, so the same hang repeated on
+  every tick with failureCount 0.
 - Every result comment attaches the developer verification query as a `.sql` file card (run on non-production first); the result read-back uses `--min-file 1`. Questions and intake replies are exempt.
 
 ## 0.5.0 - 2026-10-28

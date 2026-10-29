@@ -249,7 +249,7 @@ def reconcile_run(cfg, token, current_token):
         mark_run(cfg, token, "ended")
         return True
 
-def guard(cfg, manual=False, release=False, token=None, force=False):
+def guard(cfg, manual=False, release=False, token=None, force=False, force_refresh=False):
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     running = cfg.state_dir / "running.json"
     # Serialize duplicate-check, idle-check, and lock creation across cron processes.
@@ -290,14 +290,14 @@ def guard(cfg, manual=False, release=False, token=None, force=False):
         last = read_object(cfg.state_dir / "last-wake.json")
         pending = cfg.state_dir / "pending-focus.jsonl"
         has_pending_focus = pending.exists() and bool(pending.read_text().strip())
-        if not manual and not recovered and not has_pending_focus and last and now - last["at"] < cfg.get("duplicate_window_seconds", 1500):
+        if not manual and not force_refresh and not recovered and not has_pending_focus and last and now - last["at"] < cfg.get("duplicate_window_seconds", 1500):
             write_json(cfg.state_dir / "guard-last.json", {"at": now, "reasons": ["duplicate-window"], "queue": {}})
             return "factory-guard: skipping duplicate (window)", None
         today = cfg.state_dir / "done-today"
         mode = "tick" if today.exists() and today.read_text().strip() == date.today().isoformat() else "morning"
         decision = {"at": now, "reasons": ["manual" if manual else "morning"] + recovered, "queue": {}}
         if not manual and mode == "tick":
-            result, code = decide(cfg)
+            result, code = decide(cfg, force_refresh=force_refresh)
             decision.update(result)
             write_json(cfg.state_dir / "guard-last.json", decision)
             write_json(cfg.state_dir / "idle.json", result)
@@ -306,6 +306,10 @@ def guard(cfg, manual=False, release=False, token=None, force=False):
                 result["reasons"] = decision["reasons"]
                 write_json(cfg.state_dir / "guard-last.json", decision)
                 write_json(cfg.state_dir / "idle.json", result)
+            if code == 1 and result.get("shouldWake") is False and not recovered:
+                append_json(cfg.state_dir / "runs.jsonl", {"at": now, "action": "monitoring-skip(guard)", **result})
+                status = result.get("sourceHealth", {}).get("status", "unavailable")
+                return "factory-guard: skipping duplicate (monitoring: " + status + ")", None
             if code == 0 and not recovered:
                 try:
                     append_json(cfg.state_dir / "runs.jsonl", {"at": now, "action": "idle-skip(guard)", **result})
@@ -414,8 +418,8 @@ def archive_finished(cfg):
     return archived, failed
 
 
-def wake(cfg, manual=False, key=None, dry_run=False):
-    message, run = guard(cfg, manual=manual)
+def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
+    message, run = guard(cfg, manual=manual, force_refresh=force_refresh)
     print(message)
     if run is None:
         if manual and key:
@@ -490,7 +494,7 @@ def validate_worker(value):
     return value
 
 
-def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="unit"):
+def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="unit", requirements=None):
     if role not in cfg.get("roles", {}).get("workers", {}):
         raise ValueError("unknown worker role")
     if key and not cfg.valid_key(key):
@@ -512,8 +516,20 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
             return 3
         timeout = budget["timeout"]
         worker_timeout = min(worker_timeout, budget["timeoutSeconds"])
+    from .requirements import snapshot, evaluate
+    declaration = snapshot(requirements) if requirements else None
+    if declaration and key is not None and declaration['manifest']['key'] != key:
+        raise ValueError("requirements key mismatch")
     command = launcher(cfg, role, token=token, key=key)
     text = Path(brief).read_text()
+    attempt_id = uuid.uuid4().hex
+    attempt = (run_path(cfg, token) / "attempts" / attempt_id if token else
+               cfg.state_dir / "worker-attempts" / attempt_id)
+    attempt.mkdir(parents=True, exist_ok=False)
+    checkpoint = attempt / "checkpoint.json"
+    if declaration:
+        write_json(attempt / "requirements.json", declaration)
+
     runbook = cfg.resolve(cfg.get("runbook", "templates/RUNBOOK.template.md"), cfg.path.parent)
     prompt = (f"You are a factory worker. Complete only the brief under runbook {runbook}. "
               f"config={cfg.path} state_dir={cfg.state_dir} run_token={token or 'legacy'} key={key or 'none'}. "
@@ -526,32 +542,113 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
               "Stop at a stage boundary before timeout, record the stage and evidence. "
               "Treat rate limit, 429 or overloaded as an infrastructure failure: use status=failed, "
               "state infra rate-limit in summary, and do not retry in this unit. "
-              "Save verifier JSON and include paths in artifacts. Report unverified work explicitly.\n\n" + text)
+              "Save verifier JSON and include paths in artifacts. Report unverified work explicitly. "
+              f"checkpoint_path={json.dumps(str(checkpoint))} "
+              "Write the exact worker-result JSON to checkpoint_path immediately after verification, before optional cleanup; "
+              "also return the exact same JSON on stdout. "
+              "Write the result fields before optional cleanup (worktree removal, merge/* branch deletion). "
+              "If a hook or permission denies a command, never retry it with another command that reaches the same effect "
+              "(rm→unlink, branch -D→update-ref); record the denied command in summary, leave it for the orchestrator and finish. "
+              + ("Caller requirements=" + json.dumps(declaration['manifest']) +
+                 ". Do not advance the declared queue stage. Return evidence for the caller gate first. " if declaration else "")
+              + "\n\n" + text)
     command += ["--title", title, "--wait-timeout", timeout,
                 "--output-schema", str(ROOT / "schemas/worker-result.schema.json"), prompt]
     env = dict(os.environ)
     for name in cfg.get("launcher", {}).get("parent_env_keys", ["PASEO_AGENT_ID", "PASEO_WORKSPACE_ID"]):
         env.pop(name, None)
-    response = subprocess.run(command, cwd=cfg.project_root, stdin=subprocess.DEVNULL, env=env,
-                              capture_output=True, text=True, timeout=worker_timeout)
-    if token:
-        safe_unit = re.sub(r"[^A-Za-z0-9_.-]+", "-", unit).strip(".-")[:120] or "unit"
-        if key and not cfg.valid_key(key):
+    started = time.time()
+    clock_started = time.monotonic()
+    stdout, stderr, code, process_error = "", "", 0, None
+    process_code = None
+    value, saved, gate = None, None, None
+    validation_error = None
+    expected_key = key if key is not None else declaration["manifest"]["key"] if declaration else None
+    def valid_result(raw):
+        result = validate_worker(json.loads(raw))
+        if result["key"] is not None and not cfg.valid_key(result["key"]):
             raise ValueError("invalid worker key")
-        path = run_path(cfg, token)
-        path.mkdir(parents=True, exist_ok=True)
-        (path / f"{key or 'no-key'}-{safe_unit}.json").write_text(response.stdout)
-        (path / f"{key or 'no-key'}-{safe_unit}.stderr.txt").write_text(response.stderr)
-    if response.stderr:
-        print(response.stderr, end="", file=sys.stderr)
-    if response.returncode:
-        print(json.dumps({"error": "worker-launch-failed"}))
-        return response.returncode
-    value = validate_worker(json.loads(response.stdout))
-    if value["key"] is not None and not cfg.valid_key(value["key"]):
-        raise ValueError("invalid worker key")
-    if key is not None and value["key"] != key:
-        raise ValueError("worker result key mismatch")
+        if expected_key is not None and result["key"] != expected_key:
+            raise ValueError("worker result key mismatch")
+        return result
+    try:
+        try:
+            response = subprocess.run(command, cwd=cfg.project_root, stdin=subprocess.DEVNULL, env=env,
+                                      capture_output=True, text=True, timeout=worker_timeout)
+            stdout, stderr, code = response.stdout, response.stderr, response.returncode
+            process_code = response.returncode
+            if code:
+                process_error = "worker-launch-failed"
+        except subprocess.TimeoutExpired as error:
+            stdout, stderr, code, process_error = error.stdout or "", error.stderr or "", 124, "worker-timeout"
+        except (OSError, subprocess.SubprocessError):
+            code, process_error = 2, "worker-command-unavailable"
+        stdout = stdout.decode(errors="replace") if isinstance(stdout, bytes) else stdout
+        stderr = stderr.decode(errors="replace") if isinstance(stderr, bytes) else stderr
+        (attempt / "stdout.txt").write_text(stdout)
+        (attempt / "stderr.txt").write_text(stderr)
+        if token:
+            safe_unit = re.sub(r"[^A-Za-z0-9_.-]+", "-", unit).strip(".-")[:120] or "unit"
+            path = run_path(cfg, token)
+            # Keep the first legacy files and every attempt; retries must not destroy evidence.
+            for name, raw in ((f"{key or 'no-key'}-{safe_unit}.json", stdout),
+                              (f"{key or 'no-key'}-{safe_unit}.stderr.txt", stderr)):
+                try:
+                    with (path / name).open("x") as stream:
+                        stream.write(raw)
+                except FileExistsError:
+                    pass
+        if stderr:
+            print(stderr, end="", file=sys.stderr)
+        try:
+            if checkpoint.is_file() and checkpoint.stat().st_mtime >= started:
+                saved = valid_result(checkpoint.read_text())
+                write_json(attempt / "checkpoint-validated.json", saved)
+        except (OSError, ValueError, TypeError, KeyError):
+            saved = None
+        if not process_error:
+            try:
+                value = valid_result(stdout)
+            except (ValueError, TypeError, KeyError) as error:
+                if saved is None:
+                    code, process_error = 2, "invalid-worker-result"
+                    validation_error = error
+                else:
+                    value = saved
+        if value is not None:
+            write_json(attempt / "result.json", value)
+        if declaration and (value is not None or saved is not None):
+            gate = evaluate(declaration, value if value is not None else saved, key)
+            write_json(attempt / "gate.json", gate)
+            if not process_error and value.get("status") == "done" and not gate["passed"]:
+                code, process_error = 4, "required-checks-failed"
+    except (OSError, ValueError, TypeError, KeyError):
+        code, process_error = 2, "worker-evidence-recording-failed"
+    finally:
+        ended = time.time()
+        mapping = cfg.get("roles", {}).get("workers", {}).get(role, {})
+        metadata = {"attemptId": attempt_id, "key": key, "unit": unit, "role": role,
+                    "token": token, "startedAt": started, "endedAt": ended,
+                    "durationSeconds": time.monotonic() - clock_started,
+                    "exitCode": code, "processExitCode": process_code,
+                    "resultStatus": (value or saved or {}).get("status"),
+                    "outcome": process_error or ("success" if value and value["status"] == "done" else (value or {}).get("status", "unknown")),
+                    "source": "factory-worker",
+                    "provider": mapping.get("provider"), "model": mapping.get("model"),
+                    "stage": (value or saved or {}).get("stage"),
+                    "observations": {}, "metrics": {name: None for name in
+                    ("tokens", "costUsd", "waitSeconds", "humanInterventions", "reworkCount")}}
+        write_json(attempt / "invocation.json", metadata)
+    if validation_error is not None:
+        raise validation_error
+    if process_error:
+        failure = {"error": process_error, "invocation": str(attempt / "invocation.json"), "retryAllowed": False}
+        if saved is not None:
+            failure.update(checkpoint=str(attempt / "checkpoint-validated.json"), result=saved)
+        if gate is not None:
+            failure["gate"] = gate
+        print(json.dumps(failure))
+        return code
     print(json.dumps(value))
     return 0
 
@@ -563,11 +660,13 @@ def main(argv=None):
     parser.add_argument("--manual", action="store_true")
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--force-refresh", action="store_true")
     parser.add_argument("--owns")
     parser.add_argument("--recover")
     parser.add_argument("--reconciled")
     parser.add_argument("--blocked")
     parser.add_argument("--unit", default="unit")
+    parser.add_argument("--requirements")
     parser.add_argument("--token")
     parser.add_argument("--now", action="store_true")
     parser.add_argument("--key")
@@ -589,16 +688,16 @@ def main(argv=None):
                 found = args.blocked in blocked or "*" in blocked
                 print(json.dumps(sorted(blocked)))
                 return 1 if found else 0
-            message, _ = guard(cfg, args.manual, args.release, args.token, args.force)
+            message, _ = guard(cfg, args.manual, args.release, args.token, args.force, args.force_refresh)
             print(message)
             return 2 if "requires token" in message else 1 if "mismatch" in message else 0
         if args.kind == "wake":
             if args.key and (not args.now or not cfg.valid_key(args.key)):
                 parser.error("--key requires --now and a configured key")
-            return wake(cfg, args.now, args.key, args.dry_run)
+            return wake(cfg, args.now, args.key, args.dry_run, args.force_refresh)
         if len(args.args) not in (3, 4):
             parser.error("worker requires ROLE TITLE BRIEF [TIMEOUT]")
-        return worker(cfg, *args.args, token=args.token, key=args.key, unit=args.unit)
+        return worker(cfg, *args.args, token=args.token, key=args.key, unit=args.unit, requirements=args.requirements)
     except StateDirectoryError as error:
         print(json.dumps({"error": str(error)}))
         return 1 if args.kind == "guard" and args.owns is not None else 2

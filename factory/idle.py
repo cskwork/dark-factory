@@ -3,6 +3,8 @@ import argparse
 from datetime import date
 import hashlib
 import json
+import math
+import re
 import subprocess
 import time
 from .config import StateDirectoryError, load_config
@@ -76,8 +78,134 @@ def pending_focus(cfg, blocked):
     return runnable, sorted(blocked_pending)
 
 
-def decide(cfg, classifier=None):
-    result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": []}
+
+SCAN_RETRY_PAUSE = 3
+
+
+def scan_budget(cfg):
+    """Total wall seconds for one scan including its retry; a hang must not outlive the tick."""
+    settings = cfg.get("intake", {})
+    default = cfg.get("command_timeout_seconds", 300)
+    budget = settings.get("scan_budget_seconds", default) if isinstance(settings, dict) else default
+    if type(budget) not in (int, float) or not math.isfinite(budget) or budget <= 0:
+        raise ValueError("invalid scan budget")
+    return float(budget)
+
+
+def record_scan_failure(cfg, state, now, count, failure, elapsed):
+    state.setdefault("lastSuccessAt", None)
+    state.update(status="unavailable", failureCount=count + 1, lastErrorAt=now,
+                 lastError=failure, retryAt=now + (1800 if count == 0 else 3600),
+                 durationSeconds=elapsed, cooldown=False, attemptStartedAt=None)
+    write_json(cfg.state_dir / "scan-state.json", state)
+    return state
+
+
+def source_health(state, scan, now):
+    """Per-source status is descriptive; one unavailable source never cools the adapter."""
+    sources = scan.get("sources")
+    if sources is None:
+        state.pop("sources", None)
+        return "unavailable" if scan["errors"] else "available"
+    if not isinstance(sources, dict) or not sources:
+        raise ValueError("invalid sources")
+    previous = state.get("sources", {})
+    if not isinstance(previous, dict) or not all(isinstance(row, dict) for row in previous.values()):
+        raise ValueError("invalid previous source health")
+    observed = {}
+    for name, row in sources.items():
+        if (not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name)
+                or not isinstance(row, dict) or row.get("status") not in ("available", "degraded", "unavailable")
+                or ("reason" in row and (not isinstance(row["reason"], str)
+                    or not re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", row["reason"])))):
+            raise ValueError("invalid source health")
+        timing = row.get("durationSeconds")
+        if timing is not None and (type(timing) not in (int, float) or not math.isfinite(timing) or timing < 0):
+            raise ValueError("invalid source duration")
+        history = previous.get(name, {})
+        healthy = row["status"] == "available"
+        observed[name] = {"status": row["status"], "durationSeconds": timing, "lastSuccessAt": now if healthy else history.get("lastSuccessAt"),
+                          "lastErrorAt": history.get("lastErrorAt") if healthy else now,
+                          "lastError": history.get("lastError") if healthy else row.get("reason", "source-unavailable")}
+    state["sources"] = observed
+    statuses = [row["status"] for row in observed.values()]
+    return "available" if all(v == "available" for v in statuses) else ("unavailable" if all(v == "unavailable" for v in statuses) else "degraded")
+
+
+def scan_intake(cfg, now, force_refresh=False):
+    """Only whole-command failure cools down an adapter; sources are descriptive."""
+    path = cfg.state_dir / "scan-state.json"
+    state = read_object(path)
+    count = state.get("failureCount", 0)
+    if type(count) is not int or count < 0:
+        raise ValueError("invalid scan failure count")
+    attempt = state.get("attemptStartedAt")
+    if attempt is not None:
+        # A tick killed inside the scan never reached the accounting below, so the same
+        # hang came back every tick with failureCount 0. Count it before scanning again.
+        try:
+            elapsed = max(0.0, now - epoch(attempt))
+        except (ValueError, TypeError):
+            elapsed = None
+        state = record_scan_failure(cfg, state, now, count, "scan-interrupted", elapsed)
+        return None, {**state, "cooldown": True}, ["scan-interrupted"]
+    if not force_refresh and epoch(state.get("retryAt") or 0) > now:
+        return None, {**state, "cooldown": True}, ["scan-cooldown"]
+    budget = scan_budget(cfg)
+    state.update(attemptStartedAt=now, cooldown=False)
+    write_json(path, state)
+    started = time.monotonic()
+    try:
+        failure, scan = None, None
+        try:
+            response = cfg.run(cfg.get("intake", {})["scan_cmd"], timeout=budget)
+            if response.returncode:
+                # Retry only what the budget still covers; a hang must not double the tick.
+                remaining = budget - (time.monotonic() - started) - SCAN_RETRY_PAUSE
+                if remaining > 0:
+                    time.sleep(SCAN_RETRY_PAUSE)
+                    response = cfg.run(cfg.get("intake", {})["scan_cmd"], timeout=remaining)
+            if response.returncode:
+                failure = "scan-failed"
+            else:
+                unauthorized = "unauthorized" in (response.stdout + response.stderr).lower()
+                try:
+                    scan = json.loads(response.stdout)
+                except ValueError:
+                    if not unauthorized:
+                        raise
+                # Structured source health scopes auth failure to its unavailable source.
+                if unauthorized and not (isinstance(scan, dict) and "sources" in scan):
+                    failure = "scan-unauthorized"
+        except subprocess.TimeoutExpired:
+            failure = "scan-timeout"
+        except (OSError, subprocess.SubprocessError):
+            failure = "scan-command-unavailable"
+        elapsed = time.monotonic() - started
+        if failure:
+            return None, record_scan_failure(cfg, state, now, count, failure, elapsed), [failure]
+        if not isinstance(scan, dict) or not isinstance(scan.get("events"), list) or not isinstance(scan.get("errors"), list):
+            raise ValueError("invalid scan")
+        status = source_health(state, scan, now)
+        state.update(status=status, failureCount=0, retryAt=None, durationSeconds=elapsed,
+                     cooldown=False, attemptStartedAt=None)
+        if status == "available":
+            state["lastSuccessAt"] = now
+        else:
+            state.update(lastErrorAt=now, lastError="source-unavailable" if scan.get("sources") else "scan-errors")
+        for name in ("lastSuccessAt", "lastErrorAt", "lastError"):
+            state.setdefault(name, None)
+        write_json(path, state)
+        return scan, state, ([] if status == "available" else ["scan-errors"])
+    except Exception:
+        # Any observed error resolves this attempt; only a killed process leaves the marker.
+        state["attemptStartedAt"] = None
+        write_json(path, state)
+        raise
+
+
+def decide(cfg, classifier=None, force_refresh=False):
+    result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": [], "shouldWake": True, "timings": {}}
     now = time.time()
     reasons = result["reasons"]
     try:
@@ -90,19 +218,12 @@ def decide(cfg, classifier=None):
             reasons.append("pending-focus")
         # Always use this invocation's stdout; an old empty scan is never evidence.
         (cfg.state_dir / "scan.json").unlink(missing_ok=True)
-        response = cfg.run(cfg.get("intake", {})["scan_cmd"])
-        if response.returncode:
-            time.sleep(3)
-            response = cfg.run(cfg.get("intake", {})["scan_cmd"])
-        if response.returncode:
-            reasons.append("scan-failed")
-        if "unauthorized" in (response.stdout + response.stderr).lower():
-            reasons.append("scan-unauthorized")
-        if "scan-failed" in reasons or "scan-unauthorized" in reasons:
-            return result, 1
-        scan = json.loads(response.stdout)
-        if not isinstance(scan, dict) or not isinstance(scan.get("events"), list) or not isinstance(scan.get("errors"), list):
-            raise ValueError("invalid scan")
+        scan, health, monitoring = scan_intake(cfg, now, force_refresh)
+        result["sourceHealth"] = health
+        result["timings"]["scanSeconds"] = health.get("durationSeconds") if not health.get("cooldown") else 0
+        reasons.extend(monitoring)
+        scan_present = scan is not None
+        scan = scan or {"events": [], "errors": []}
         for event in scan["events"]:
             if (not isinstance(event, dict) or not cfg.valid_key(event.get("key"))
                     or not isinstance(event.get("id"), str) or not event["id"]
@@ -110,12 +231,13 @@ def decide(cfg, classifier=None):
                     or not all(type(event.get(name)) is bool for name in
                                ("mentions_me", "assigned_to_me", "answered_by_me_after"))):
                 raise ValueError("invalid event")
-        if scan["errors"]:
-            reasons.append("scan-errors")
-            return result, 1
-        events = triage(cfg, scan["events"], classifier)
+        triage_started = time.monotonic()
+        events = triage(cfg, scan["events"], classifier) if not scan["errors"] or "sources" in scan else []
+        result["timings"]["triageSeconds"] = time.monotonic() - triage_started
+        result["timings"]["preflightSeconds"] = 0
         events = [event for event in events if "*" not in blocked and event["key"] not in blocked]
-        write_json(cfg.state_dir / "scan.json", {**scan, "events": events})
+        if scan_present:
+            write_json(cfg.state_dir / "scan.json", {**scan, "events": events})
         result["events"] = len(events)
         if events:
             reasons.append("new-events")
@@ -162,7 +284,9 @@ def decide(cfg, classifier=None):
                 names = list(dict.fromkeys(n.strip() for n in needs))
                 signature = tuple(sorted(names))
                 if signature not in cache:
+                    probe_started = time.monotonic()
                     cache[signature] = check(cfg, names, fail_fast=True)
+                    result["timings"]["preflightSeconds"] += time.monotonic() - probe_started
                 probe, code = cache[signature]
                 if code == 0:
                     reason = "environment-ready:" + key
@@ -239,11 +363,13 @@ def decide(cfg, classifier=None):
         for path in cfg.state_dir.glob("decisions/*.json"):
             if read_object(path).get("wake_pending"):
                 reasons.append("decision-wake-pending")
+        result["shouldWake"] = bool([reason for reason in reasons if reason not in monitoring])
         if reasons:
             return result, 1
-        result.update(idle=True, reasons=["no-events", "no-runnable-work"])
+        result.update(idle=True, shouldWake=False, reasons=["no-events", "no-runnable-work"])
         return result, 0
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        result["shouldWake"] = True
         reasons.append("internal-error")
         return result, 2
     finally:
@@ -253,9 +379,10 @@ def decide(cfg, classifier=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config")
+    parser.add_argument("--force-refresh", action="store_true")
     args = parser.parse_args(argv)
     try:
-        result, code = decide(load_config(args.config))
+        result, code = decide(load_config(args.config), force_refresh=args.force_refresh)
     except StateDirectoryError as error:
         result, code = {"idle": False, "reasons": ["invalid-config"], "error": str(error)}, 2
     except (OSError, ValueError):

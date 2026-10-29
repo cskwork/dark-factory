@@ -88,6 +88,9 @@ mode = "read-only"
 [intake]
 # Adapter prints exactly one JSON object to stdout; see the runbook contract.
 scan_cmd = ["python3", "adapters/intake.py"]
+# Total wall seconds for one scan including its retry. Keep it below the tick budget:
+# a scan killed by the tick cannot record its own failure until the next scan.
+scan_budget_seconds = 300
 
 [notify]
 # Optional trusted argv adapter. Empty disables notifications; no shell is used.

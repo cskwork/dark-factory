@@ -172,6 +172,62 @@ def rank(queue, *, approvals=None, handled=None, pending=(), focus=None,
     return sorted(keys, key=order)
 
 
+METRICS = ("tokens", "costUsd", "waitSeconds", "humanInterventions", "reworkCount")
+
+
+def validate_observations(observations):
+    if observations is None:
+        return {}
+    if not isinstance(observations, dict) or set(observations) - set(METRICS):
+        raise ValueError("invalid observations")
+    for name, row in observations.items():
+        if (not isinstance(row, dict) or set(row) != {"value", "source"}
+                or type(row.get("value")) not in (int, float) or not math.isfinite(row["value"])
+                or row["value"] < 0 or not isinstance(row.get("source"), str) or not row["source"].strip()
+                or name in ("tokens", "humanInterventions", "reworkCount") and type(row["value"]) is not int):
+            raise ValueError("invalid measured observation")
+    return observations
+
+
+def aggregate_summary(value):
+    units = value["units"]
+    value["runtimeUnits"] = [row for row in units if row["runtime"]]
+    value["runtimeUnitCount"] = len(value["runtimeUnits"])
+    value["workers"] = sum(row["workers"] for row in units)
+    value["durationSeconds"] = sum(row["durationSeconds"] for row in units)
+    value["wallElapsedSeconds"] = None if any(row["endedAt"] < row["startedAt"] for row in units) else (max(row["endedAt"] for row in units) -
+                                    min(value["startedAt"], *(row["startedAt"] for row in units))) if units else 0
+    value["metrics"] = {}
+    value["stages"] = {}
+    for name in METRICS:
+        observed = [row.get("observations", {})[name]["value"] for row in units if name in row.get("observations", {})]
+        unknown = len(units) - len(observed)
+        value["metrics"][name] = {"value": sum(observed) if observed and not unknown else None,
+                                  "knownSubtotal": sum(observed) if observed else None,
+                                  "knownUnits": len(observed), "unknownUnits": unknown}
+    for row in units:
+        stage = row.get("stage") or "unknown"
+        group = value["stages"].setdefault(stage, {"units": 0, "workers": 0, "durationSeconds": 0})
+        group["units"] += 1
+        group["workers"] += row["workers"]
+        group["durationSeconds"] += row["durationSeconds"]
+
+
+def invocation_record(path, token):
+    value = read_object(path)
+    if (value.get("source") != "factory-worker" or value.get("token") != token
+            or not isinstance(value.get("attemptId"), str) or not value["attemptId"]
+            or not isinstance(value.get("unit"), str) or not value["unit"]
+            or not isinstance(value.get("outcome"), str) or not value["outcome"]
+            or type(value.get("exitCode")) is not int):
+        raise ValueError("invalid invocation record")
+    started, ended = epoch(value.get("startedAt")), epoch(value.get("endedAt"))
+    measured = value.get("durationSeconds")
+    if type(measured) not in (int, float) or not math.isfinite(measured) or measured < 0:
+        raise ValueError("invalid invocation duration")
+    return value
+
+
 def summary_init(cfg, token, runnable, lane_eligible, now=None):
     now = time.time() if now is None else epoch(now)
     if any(type(value) is not int or value < 0 for value in (runnable, lane_eligible)):
@@ -184,18 +240,33 @@ def summary_init(cfg, token, runnable, lane_eligible, now=None):
                 value.update(token=token, startedAt=started, runnable=runnable,
                              laneEligible=lane_eligible, units=[], runtimeUnits=[],
                              runtimeUnitCount=0, workers=0, durationSeconds=0)
+            aggregate_summary(value)
             value["updatedAt"] = iso(now)
         return transaction(cfg.state_dir, run_filename(token, "summary.json"), change)
 
 
-def summary_record(cfg, token, key, unit, started, ended, workers, runtime=False):
+def summary_record(cfg, token, key, unit, started, ended, workers, runtime=False, observations=None, stage=None, invocation=None, measured_duration=None):
     started, ended = epoch(started), epoch(ended)
-    if (type(workers) is not int or workers < 0 or ended < started
+    if measured_duration is not None and (invocation is None or type(measured_duration) not in (int, float)
+                                          or not math.isfinite(measured_duration) or measured_duration < 0):
+        raise ValueError("invalid measured invocation duration")
+    if (type(workers) is not int or workers < 0 or ended < started and measured_duration is None
             or type(runtime) is not bool or not isinstance(unit, str) or not unit
             or (key is not None and not cfg.valid_key(key))):
         raise ValueError("invalid unit record")
+    observations = validate_observations(observations)
+    if stage is not None and (not isinstance(stage, str) or not stage):
+        raise ValueError("invalid stage")
     record = dict(key=key, unit=unit, startedAt=started, endedAt=ended,
-                  durationSeconds=ended - started, workers=workers, runtime=runtime)
+                  durationSeconds=ended - started if measured_duration is None else measured_duration, workers=workers, runtime=runtime)
+    if observations:
+        record["observations"] = observations
+    if stage is not None:
+        record["stage"] = stage
+    if invocation is not None:
+        record["invocation"] = invocation
+        if measured_duration is not None:
+            record["durationSource"] = "factory-worker-monotonic"
 
     def change(value):
         if not value or not isinstance(value.get("units"), list):
@@ -208,10 +279,7 @@ def summary_record(cfg, token, key, unit, started, ended, workers, runtime=False
                 raise ValueError("conflicting unit record")
             return
         value["units"].append(record)
-        value["runtimeUnits"] = [row for row in value["units"] if row["runtime"]]
-        value["runtimeUnitCount"] = len(value["runtimeUnits"])
-        value["workers"] = sum(row["workers"] for row in value["units"])
-        value["durationSeconds"] = sum(row["durationSeconds"] for row in value["units"])
+        aggregate_summary(value)
         value["updatedAt"] = iso(ended)
 
     with owned(cfg, token):
@@ -291,11 +359,14 @@ def main(argv=None):
     init.add_argument("--now", type=float)
     record = sub.add_parser("summary-record", parents=[common])
     record.add_argument("--key")
-    record.add_argument("--unit", required=True)
-    record.add_argument("--started-at", type=float, required=True)
-    record.add_argument("--ended-at", type=float, required=True)
-    record.add_argument("--workers", type=int, required=True)
+    record.add_argument("--unit")
+    record.add_argument("--started-at", type=float)
+    record.add_argument("--ended-at", type=float)
+    record.add_argument("--workers", type=int)
     record.add_argument("--runtime", action="store_true")
+    record.add_argument("--stage")
+    record.add_argument("--observations", type=Path, help="explicit measured values and sources as JSON")
+    record.add_argument("--invocation", type=Path, help="actual factory-worker invocation.json")
     for name in ("defer", "processed", "rate-limit"):
         command = sub.add_parser(name, parents=[common])
         command.add_argument("--key", required=True)
@@ -306,6 +377,7 @@ def main(argv=None):
     check.add_argument("--key", required=True)
     check.add_argument("--result", type=Path, required=True)
     check.add_argument("--stderr", type=Path)
+    check.add_argument("--requirements", type=Path)
     check.add_argument("--now", type=float)
     args = parser.parse_args(argv)
     try:
@@ -328,8 +400,20 @@ def main(argv=None):
         elif args.command == "summary-init":
             result = summary_init(cfg, token, args.runnable, args.lane_eligible, now)
         elif args.command == "summary-record":
-            result = summary_record(cfg, token, args.key, args.unit, args.started_at,
-                                    args.ended_at, args.workers, args.runtime)
+            observations = json.loads(args.observations.read_text()) if args.observations else None
+            if args.invocation:
+                if any(v is not None for v in (args.key, args.unit, args.started_at, args.ended_at, args.workers, args.stage)):
+                    raise ValueError("invocation supplies identity and timing")
+                invocation = invocation_record(args.invocation, token)
+                result = summary_record(cfg, token, invocation.get("key"), invocation["unit"],
+                                        invocation["startedAt"], invocation["endedAt"], 1, args.runtime,
+                                        observations, invocation.get("stage"),
+                                        {"path": str(args.invocation.resolve()), "attemptId": invocation["attemptId"],
+                                         "outcome": invocation["outcome"], "exitCode": invocation["exitCode"],
+                                         "source": "factory-worker"}, measured_duration=invocation["durationSeconds"])
+            else:
+                result = summary_record(cfg, token, args.key, args.unit, args.started_at,
+                                        args.ended_at, args.workers, args.runtime, observations, args.stage)
         elif args.command == "check-result":
             with owned(cfg, token):
                 limited = rate_limited(args.result, args.stderr)
@@ -337,6 +421,23 @@ def main(argv=None):
             if limited:
                 update_item(cfg, token, args.key, "rate-limit", now)
                 result.update(failureType="infra", deferReason="rate-limit")
+            if args.requirements:
+                from .requirements import snapshot, evaluate
+                from .runtime import validate_worker
+                from .state import write_json
+                declaration = snapshot(args.requirements)
+                try:
+                    checked = validate_worker(json.loads(args.result.read_text()))
+                except (OSError, ValueError, TypeError, KeyError):
+                    checked = {}
+                gate = evaluate(declaration, checked, args.key)
+                result["gate"] = gate
+                if not gate["passed"]:
+                    result["retryAllowed"] = False
+                write_json(args.result.with_suffix(args.result.suffix + ".gate.json"), gate)
+                if not gate["passed"]:
+                    print(json.dumps(result))
+                    return 4
         else:
             result = update_item(cfg, token, args.key, args.command, now, getattr(args, "reason", None))
         print(json.dumps(result))
