@@ -232,6 +232,14 @@ class EvidenceTests(Fixture):
                 self.assertFalse(payload['retryAllowed'])
             self.assertEqual(result_path.read_bytes(), before)
             self.assertTrue(result_path.with_suffix('.json.gate.json').exists())
+            if expected:
+                self.assertEqual(payload['queueWaiting'], 'human-risk')
+        # A worker blocked on VPN/DB reports env-human; the queue must keep it so the guard asks for VPN.
+        for value, waiting in (({**self.result, 'status': 'waiting', 'waiting': 'env-human', 'checks': []}, 'env-human'),
+                               ({**self.result, 'status': 'waiting', 'waiting': 'env-human', 'key': 'PROJ-9'}, 'human-risk')):
+            result_path.write_text(json.dumps(value))
+            response = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=20)
+            self.assertEqual((response.returncode, json.loads(response.stdout)['queueWaiting']), (4, waiting))
 
     def test_retry_preserves_first_raw_result_and_unique_attempts(self):
         self.write('running.json', {'token': 'test', 'started_at': time.time()})

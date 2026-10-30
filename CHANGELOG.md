@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.1 - 2026-10-30
+
+- A failed `check-result --requirements` gate now returns `queueWaiting`. A worker that stopped on an
+  environment wait (env-human/env-down, e.g. wrong VPN for a DB check) keeps that wait instead of
+  being overwritten with human-risk, so the guard probes its needs, notifies the VPN action and resumes
+  when the environment is ready. Identity mismatches stay human-risk.
+
 ## 0.6.0 - 2026-10-29
 
 - Count and alert on failed intake monitoring instead of only cooling it down: a malformed

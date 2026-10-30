@@ -435,7 +435,10 @@ Workers must not advance a declared queue stage. After the wrapper succeeds,
 the orchestrator independently runs `factory.drain ... check-result --key KEY
 --result RESULT --requirements REQUIREMENTS.json`, reads its gate JSON and only
 then patches that stage. Failure is exit 4; preserve all passing artifacts and
-keep the current stage. No low-level state machine is added; callers must use
+keep the current stage. Set the item's waiting to the gate's `queueWaiting`: a worker that stopped
+on an environment wait (env-human/env-down, e.g. wrong VPN) keeps it, with the
+blocked step's nextStep/needs, so the guard probes and asks for VPN; anything
+else is human-risk, which the guard never probes or notifies. No low-level state machine is added; callers must use
 this gate before their declared transition. The wrapper and drain gate verify
 saved caller-declared evidence; they do not run or authenticate remote verifiers.
 

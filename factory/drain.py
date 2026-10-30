@@ -434,6 +434,12 @@ def main(argv=None):
                 result["gate"] = gate
                 if not gate["passed"]:
                     result["retryAllowed"] = False
+                    # An env wait reported by the worker must stay an env wait: only env-human/env-down
+                    # items are probed and notified by the guard, so human-risk would hide a VPN request.
+                    reasons = {failure.get("reason") for failure in gate["failures"]}
+                    worker_wait = checked.get("waiting")
+                    env_wait = worker_wait in ("env-human", "env-down") and "key-or-stage-mismatch" not in reasons
+                    result["queueWaiting"] = worker_wait if env_wait else "human-risk"
                 write_json(args.result.with_suffix(args.result.suffix + ".gate.json"), gate)
                 if not gate["passed"]:
                     print(json.dumps(result))
