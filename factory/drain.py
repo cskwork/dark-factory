@@ -332,9 +332,24 @@ def update_item(cfg, token, key, action, now=None, reason=None):
         return transaction(cfg.state_dir, "queue.json", change)
 
 
+def output_text(*paths):
+    return "\n".join(Path(path).read_text(encoding="utf-8", errors="replace") for path in paths if path is not None)
+
+
 def rate_limited(*paths):
-    text = "\n".join(Path(path).read_text(encoding="utf-8", errors="replace") for path in paths if path is not None)
-    return bool(re.search(r"rate[ -]?limit|\b429\b|\boverloaded\b", text, re.I))
+    return bool(re.search(r"rate[ -]?limit|\b429\b|\boverloaded\b", output_text(*paths), re.I))
+
+
+def model_refusal(cfg, *paths):
+    """Worker role to retry with when every configured refusal pattern matches, else None.
+
+    A provider's content filter refusing the task is not a failure of the work itself.
+    """
+    settings = cfg.get("drain", {}).get("model_refusal")
+    if not settings:
+        return None
+    text = output_text(*paths)
+    return settings["retry_worker"] if all(re.search(pattern, text) for pattern in settings["patterns"]) else None
 
 
 def main(argv=None):
@@ -417,7 +432,11 @@ def main(argv=None):
         elif args.command == "check-result":
             with owned(cfg, token):
                 limited = rate_limited(args.result, args.stderr)
+            refusal = None if limited else model_refusal(cfg, args.result, args.stderr)
             result = dict(rateLimited=limited, retryAllowed=not limited)
+            if refusal:
+                # Retry the same unit once with the named worker role; the retry decides the outcome.
+                result.update(failureType="model-refusal", retryWorker=refusal)
             if limited:
                 update_item(cfg, token, args.key, "rate-limit", now)
                 result.update(failureType="infra", deferReason="rate-limit")
@@ -432,7 +451,10 @@ def main(argv=None):
                     checked = {}
                 gate = evaluate(declaration, checked, args.key)
                 result["gate"] = gate
-                if not gate["passed"]:
+                if not gate["passed"] and refusal:
+                    # No wait is chosen here: the retry's own result decides it.
+                    gate["retryAllowed"] = result["retryAllowed"] = True
+                elif not gate["passed"]:
                     result["retryAllowed"] = False
                     # An env wait reported by the worker must stay an env wait: only env-human/env-down
                     # items are probed and notified by the guard, so human-risk would hide a VPN request.

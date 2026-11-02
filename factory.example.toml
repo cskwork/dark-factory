@@ -22,6 +22,14 @@ enabled = true
 [drain]
 enabled = true
 
+# Optional: a provider's content filter refusing the task is not a failure of the work.
+# When every pattern (Python regex) matches the worker result or stderr, check-result
+# returns failureType=model-refusal and retryWorker; the orchestrator retries that unit
+# once with this worker role. A failed retry is human-risk.
+[drain.model_refusal]
+patterns = ["OUTPUT_SCHEMA_FAILED", "(?i)cybersecurity"]
+retry_worker = "fallback"
+
 # TOML insertion order is promotion order. Never infer approval from this order.
 [env_branches]
 dev = "origin/dev"
@@ -85,12 +93,40 @@ model = "claude-opus-5-5"
 thinking = "medium"
 mode = "read-only"
 
+[roles.workers.fallback]
+provider = "claude"
+model = "claude-opus-5-5"
+thinking = "high"
+mode = "default"
+
 [intake]
 # Adapter prints exactly one JSON object to stdout; see the runbook contract.
 scan_cmd = ["python3", "adapters/intake.py"]
 # Total wall seconds for one scan including its retry. Keep it below the tick budget:
 # a scan killed by the tick cannot record its own failure until the next scan.
 scan_budget_seconds = 300
+
+# Optional queue/tracker reconciliation. The intake adapter may add
+# "queueStatuses":{"PROJ-123":"Released"} for keys already in queue.json. Every tick the
+# guard removes items whose status maps to done or whose stage is a done stage, and turns
+# human-risk into reporter when the status maps to awaiting-reporter. Keys owned by another
+# run are left alone. Unmapped statuses change nothing; omit the table to disable.
+[reconcile]
+done_stages = ["shipped"]
+[reconcile.status_map]
+"Released" = "done"
+"Release verified" = "done"
+"Staging verified" = "done"
+"QA requested" = "awaiting-reporter"
+"Staging QA requested" = "awaiting-reporter"
+
+# Worktrees the orchestrator may remove from a worker's cleanup:<path> artifacts with
+# python3 -m factory.cleanup --config CONFIG --result RESULT --execute. Roots are relative
+# to project_root; a target outside them is kept. A promoted merge branch (tip contained in
+# an env_branches ref) is deleted with its worktree.
+[cleanup]
+roots = ["worktrees"]
+merge_branch_prefix = "merge/"
 
 [notify]
 # Optional trusted argv adapter. Empty disables notifications; no shell is used.

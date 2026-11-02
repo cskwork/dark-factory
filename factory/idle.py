@@ -205,6 +205,11 @@ def scan_intake(cfg, now, force_refresh=False):
                     or not all(type(event.get(name)) is bool for name in
                                ("mentions_me", "assigned_to_me", "answered_by_me_after"))):
                 raise ValueError("invalid event")
+        statuses = scan.get("queueStatuses", {})
+        if (not isinstance(statuses, dict) or not isinstance(scan.get("queueStatusError", ""), str)
+                or not all(cfg.valid_key(key) and (value is None or isinstance(value, str))
+                           for key, value in statuses.items())):
+            raise ValueError("invalid queue statuses")
         status = source_health(state, scan, now)
         state.update(status=status, failureCount=0, retryAt=None, durationSeconds=elapsed,
                      cooldown=False, attemptStartedAt=None, alerted=False)
@@ -229,6 +234,55 @@ def scan_intake(cfg, now, force_refresh=False):
         raise
 
 
+def reconcile_queue(cfg, queue, statuses, blocked):
+    """Plan removals and reply waits from tracker status; keys owned by another run stay as they are.
+
+    The factory's work on a key is over when its tracker status maps to done or its stage is a
+    configured done stage; a human-risk item whose status maps to awaiting-reporter is really
+    waiting for the reporter's QA reply. Without this, finished tickets kept the queue waiting.
+    """
+    settings = cfg.get("reconcile", {})
+    status_map, done_stages = settings.get("status_map", {}), settings.get("done_stages", [])
+    removals, to_reporter = {}, {}
+    if "*" in blocked:
+        return removals, to_reporter
+    for key, item in list(queue.items()):
+        if key in blocked:
+            continue
+        status = statuses.get(key)
+        verdict = status_map.get(status)
+        if verdict == "done" or item.get("stage") in done_stages:
+            removals[key] = status if verdict == "done" else "stage=" + str(item.get("stage"))
+            del queue[key]
+        elif verdict == "awaiting-reporter" and item.get("waiting") == "human-risk":
+            note = item.get("note")
+            item.update(waiting="reporter", note=(str(note) + " | " if note else "") + "guard "
+                        + date.today().isoformat() + ": tracker status '" + status + "' awaits the reporter's reply")
+            to_reporter[key] = status
+    return removals, to_reporter
+
+
+def short_keys(keys, limit=8):
+    return ", ".join(keys[:limit]) + (" and " + str(len(keys) - limit) + " more" if len(keys) > limit else "")
+
+
+def human_summary(waits):
+    """Message when nothing is runnable but human-risk items wait; otherwise None."""
+    groups = {}
+    for key, waiting in sorted(waits.items()):
+        groups.setdefault(waiting, []).append(key)
+    human = groups.pop("human-risk", [])
+    if None in groups or not human:
+        return None
+    reply = groups.pop("reporter", [])
+    other = sum(len(keys) for keys in groups.values())
+    lines = ["No runnable work: human check " + str(len(human)) + ", awaiting reply " + str(len(reply))
+             + (", other waits " + str(other) if other else ""), "Human check: " + short_keys(human)]
+    if reply:
+        lines.append("Awaiting reply: " + short_keys(reply))
+    return "\n".join(lines)
+
+
 def decide(cfg, classifier=None, force_refresh=False):
     result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": [], "shouldWake": True, "timings": {}}
     now = time.time()
@@ -249,6 +303,9 @@ def decide(cfg, classifier=None, force_refresh=False):
         reasons.extend(monitoring)
         scan_present = scan is not None
         scan = scan or {"events": [], "errors": []}
+        if scan.get("queueStatusError"):
+            # A failed status lookup is not a new event, so it never wakes the orchestrator.
+            result["queueStatusError"] = scan["queueStatusError"][:300]
         triage_started = time.monotonic()
         events = triage(cfg, scan["events"], classifier) if not scan["errors"] or "sources" in scan else []
         result["timings"]["triageSeconds"] = time.monotonic() - triage_started
@@ -268,6 +325,7 @@ def decide(cfg, classifier=None, force_refresh=False):
                 raise ValueError("invalid waiting")
             if "*" not in blocked and key not in blocked and not backoff_active(item, now):
                 normalize(item)
+        removals, to_reporter = reconcile_queue(cfg, queue, scan.get("queueStatuses", {}), blocked)
         state = read_object(cfg.state_dir / "guard-state.json")
         previous = state.get("runnable", {})
         if not isinstance(previous, dict):
@@ -345,8 +403,15 @@ def decide(cfg, classifier=None, force_refresh=False):
                 else:
                     reasons.append(reason)
         changes = {key: (originals[key], item) for key, item in queue.items() if item != originals[key]}
-        if changes:
+        reconciled = {"removed": {}, "reporter": {}}
+        if changes or removals:
             def update_queue(latest):
+                for key, why in removals.items():
+                    current = latest.get(key)
+                    # Another writer changed the item since this scan: leave it alone.
+                    if isinstance(current, dict) and item_digest(current) == item_digest(originals[key]):
+                        del latest[key]
+                        reconciled["removed"][key] = why
                 for key, (before, after) in changes.items():
                     current = latest.get(key)
                     if not isinstance(current, dict) or item_digest(current) != item_digest(before):
@@ -354,7 +419,13 @@ def decide(cfg, classifier=None, force_refresh=False):
                     for field, value in after.items():
                         if before.get(field) != value and current.get(field) == before.get(field):
                             current[field] = value
+                    if key in to_reporter and current.get("waiting") == "reporter":
+                        reconciled["reporter"][key] = to_reporter[key]
             transaction(cfg.state_dir, "queue.json", update_queue)
+        if reconciled["removed"] or reconciled["reporter"]:
+            result["queueReconcile"] = reconciled
+            # Append-only evidence: a removed key can be queued again from this record.
+            append_json(cfg.state_dir / "runs.jsonl", {"at": now, "action": "queue-reconcile", **reconciled})
         state["runnable"] = runnable
         result["waitingHuman"] = [{"action": action, "keys": sorted(keys)} for action, keys in sorted(groups.items())]
         today = date.today().isoformat()
@@ -367,6 +438,19 @@ def decide(cfg, classifier=None, force_refresh=False):
                 seen.append(digest)
             else:
                 result["notify"] = "deduplicated"
+        summary = None if blocked else human_summary(result["queue"])
+        if summary:
+            # Nothing can move and nobody is told otherwise: one summary per local day, whatever the counts.
+            waits = list(result["queue"].values())
+            row = {"humanRisk": waits.count("human-risk"), "reporter": waits.count("reporter")}
+            row["other"] = len(waits) - row["humanRisk"] - row["reporter"]
+            marker = content_hash("queue-human-summary")
+            if marker in seen:
+                row["notify"] = "deduplicated"
+            else:
+                row["notify"] = notify(cfg, summary)
+                seen.append(marker)
+            result["humanSummary"] = row
         state["waitingHuman"] = {"day": today, "hashes": seen}
         state["at"] = now
         transaction(cfg.state_dir, "guard-state.json", lambda latest: latest.update(

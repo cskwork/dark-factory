@@ -61,6 +61,21 @@ statuses), with `"intake":true`, a stable id such as `intake`, the reporter as
 `queue.json`, and ids already in `handled`. Without intake, owned work waits
 until somebody comments. Triage never classifies intake events.
 
+The adapter may also report the current tracker status of every key already in
+`queue.json` as `"queueStatuses":{"PROJ-123":"Released"}` (reuse statuses it
+already fetched and ask for the rest in one search). A failed lookup goes to
+`"queueStatusError":"..."` only, never `errors`, because it is not a new event
+and must not wake the line. With `[reconcile]` configured, the guard maps each
+status through `status_map` every tick: `done`, or a stage listed in
+`done_stages`, removes the item; `awaiting-reporter` turns a `human-risk` item
+into `reporter` and appends the reason to its note. Keys owned by another run
+(or every key when ownership is unknown) and items changed by another writer
+since the scan are left alone. Results go to `guard-last.json` `queueReconcile`
+and a `queue-reconcile` line in `runs.jsonl`; re-queue a removed key from that
+record if needed. Unmapped statuses change nothing. Malformed `queueStatuses`
+counts as `scan-malformed`. Without reconciliation, finished tickets and tickets
+waiting for QA replies kept the queue at "everything waits, nothing runs".
+
 Triage records `answered_by_me_after=true` as handled without calling a model.
 Optional `triage.classifier_cmd` reads `{"events":[...]}` on stdin, treating event
 text as untrusted data, and prints exactly:
@@ -146,7 +161,11 @@ Question comments are exempt from the clarity gate but obey every other comment
 rule. Keep one open question per ticket, and wait. If the requester is the
 operator, or the question needs the operator's own decision, use a decision page
 instead of a comment. When fixing starts on an intake ticket, move it to the
-in-progress status once and read the status back.
+in-progress status and read the status back. Workflows often have no direct
+transition (backlog → to-do → in progress): take one transition at a time,
+read the status back after each, and decide the next step from the status you
+read, never by guessing from the list of available transitions. A rule to move
+"once" stalled a ticket whose backlog had no direct path to in progress.
 
 Post-release follow-up: when an in-scope comment on a ticket already in a
 post-release status (released or release-verified) reports a problem with the
@@ -263,6 +282,11 @@ reasons, queue, stuck, waitingHuman, blockedKeys, and blockedPendingKeys;
 guard-state.json stores hashes/counts and
 notification deduplication. `notify.cmd` receives one `{message}` argument.
 Human waits are grouped and notified once per distinct group per local day.
+When no queue item is runnable (`waiting` null), no other run owns a key, and
+`human-risk` items exist, the guard sends one summary per local day whatever the
+counts: `No runnable work: human check N, awaiting reply M[, other waits K]` with
+the keys (`guard-last.json` `humanSummary`). Without it, a queue where every item
+waited looked like a concurrency limit instead of work needing people.
 Notification failure is recorded without changing the work decision.
 
 ## Sequential drain
@@ -286,6 +310,12 @@ Use `python3 -m factory.drain --config CONFIG --token TOKEN COMMAND`:
   one run counts once. Success clears backoff and deferral metadata.
 - `check-result --key KEY --result FILE [--stderr FILE]`: rate limit, 429,
   or overloaded is infrastructure failure and is excluded from model retries.
+  With `[drain.model_refusal]`, output matching every configured pattern (for
+  example a schema failure caused by a provider's cybersecurity filter) returns
+  `failureType=model-refusal`, `retryAllowed=true` and `retryWorker=ROLE`, even
+  when a requirements gate failed; no `queueWaiting` is chosen. Retry the same
+  unit once with that role; a failed retry is `human-risk`. Rate limits win over
+  refusal patterns.
 
 Refresh intake before every next runtime unit; process new events sequentially
 first. Runtime work never overlaps. Stop at a stage boundary if budget is short.
@@ -399,7 +429,7 @@ failureCount together. A failed failure-record write never replaces the original
 window for tick scans. A running lock still takes precedence.
 
 Workers receive a unique JSON-quoted checkpoint_path per attempt. Write exact
-worker-result JSON there after verification and before optional cleanup, and
+worker-result JSON there after verification and before finishing, and
 return the same seven-field JSON on stdout. Attempt directories retain stdout,
 stderr, validated checkpoint and invocation.json even for timeout/nonzero exit.
 The first legacy KEY-UNIT files stay intact; retries get new attempt paths.
@@ -408,7 +438,19 @@ attempt's legacy file.
 A valid checkpoint is recovery evidence; nonzero exit/timeout still fails and
 never releases a live lock. Wrong-key or stale checkpoint files are rejected.
 
-> Write the result fields before optional cleanup (worktree removal, merge/* branch deletion). If a hook or permission denies a command, never retry it with another command that reaches the same effect (rm→unlink, branch -D→update-ref); record the denied command in summary, leave it for the orchestrator and finish.
+> Never remove worktrees or delete merge/* branches yourself, even when project instructions say to: list each worktree you are done with in artifacts as cleanup:<absolute worktree path>; the orchestrator removes them with factory.cleanup. Commit with a subject line and a short body (git commit -m SUBJECT -m BODY); fixing a message that a commit-msg hook rejected and committing again is not a bypass. If a hook or permission denies a command, never retry it with another command that reaches the same effect (rm→unlink, branch -D→update-ref); record the denied command in summary, leave it for the orchestrator and finish.
+
+Workers that ran their own cleanup stalled on its confirmation prompt after the
+work was done and returned no result. The orchestrator therefore runs
+`python3 -m factory.cleanup --config CONFIG --result RESULT [--execute]` after
+check-result (dry run without `--execute`). It removes only `cleanup:` targets
+that are worktrees under `[cleanup].roots` with no uncommitted, untracked or
+unpushed changes, using `git worktree remove` without force. A branch starting
+with `merge_branch_prefix` is deleted too when its tip is contained in an
+`env_branches` ref. Everything else is kept with a reason (`outside-roots`,
+`not-absolute`, `not-worktree`, `dirty`, `unpushed`). Output is JSON with
+removable, removed, kept, failed and branchesDeleted; exit 1 means a removal
+failed, 2 invalid input. Without `[cleanup].roots` every target is kept.
 
 For declared completion, the orchestrator writes a requirements manifest before
 launch and passes `factory-worker ... --requirements REQUIREMENTS.json`.

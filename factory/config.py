@@ -11,6 +11,11 @@ class StateDirectoryError(ValueError):
     """Unsafe state directory supplied by configuration."""
 
 
+def strings(value):
+    """A list of nonempty strings (an empty list is allowed)."""
+    return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
+
+
 class Config:
     def __init__(self, data, path):
         self.data = data
@@ -37,6 +42,26 @@ class Config:
         threshold = triage.get("confidence_threshold", 0.9)
         if type(threshold) not in (int, float) or not 0 <= threshold <= 1:
             raise ValueError("invalid confidence threshold")
+        reconcile = self.get("reconcile", {})
+        if (not isinstance(reconcile, dict) or not isinstance(reconcile.get("status_map", {}), dict)
+                or not all(value in ("done", "awaiting-reporter") for value in reconcile.get("status_map", {}).values())
+                or not strings(reconcile.get("done_stages", []))):
+            raise ValueError("invalid reconcile settings")
+        refusal = self.get("drain", {}).get("model_refusal")
+        if refusal is not None:
+            workers = self.get("roles", {}).get("workers", {})
+            if (not isinstance(refusal, dict) or not refusal.get("patterns") or not strings(refusal["patterns"])
+                    or refusal.get("retry_worker") not in workers):
+                raise ValueError("invalid drain.model_refusal")
+            for pattern in refusal["patterns"]:
+                try:
+                    re.compile(pattern)
+                except re.error as error:
+                    raise ValueError("invalid drain.model_refusal pattern") from error
+        cleanup = self.get("cleanup", {})
+        if (not isinstance(cleanup, dict) or not strings(cleanup.get("roots", []))
+                or not strings([cleanup.get("merge_branch_prefix", "merge/")])):
+            raise ValueError("invalid cleanup settings")
 
     @staticmethod
     def resolve(value, parent):

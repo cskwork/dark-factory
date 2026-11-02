@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.6.2 - 2026-11-02
+
+- Reconcile the queue with the tracker every tick. The intake scan may report `queueStatuses` for
+  queued keys (a failed lookup goes to `queueStatusError` and never wakes the line); with
+  `[reconcile]`, items whose status maps to `done` or whose stage is a `done_stages` entry leave the
+  queue, and `human-risk` items whose status maps to `awaiting-reporter` become `reporter`. Keys owned
+  by another run, unknown ownership and concurrent edits are left alone; results are recorded in
+  `guard-last.json` `queueReconcile` and `runs.jsonl`. Previously finished and QA-waiting tickets kept
+  every queue item waiting, so nothing ran.
+- When nothing is runnable, no other run owns a key and `human-risk` items exist, the guard sends one
+  summary a day (`No runnable work: human check N, awaiting reply M`) instead of staying silent.
+- `check-result` classifies a provider's content-filter refusal configured in `[drain.model_refusal]`
+  as `failureType=model-refusal` with `retryAllowed=true` and `retryWorker`, even when the requirements
+  gate failed; the orchestrator retries the unit once with that role and a failed retry is human-risk.
+- Workers no longer clean up: they list `cleanup:<path>` in artifacts and the orchestrator runs the new
+  `python3 -m factory.cleanup --result RESULT --execute`, which removes only clean, pushed worktrees
+  under `[cleanup].roots` and merge branches whose tip is in an `env_branches` ref. Workers stalled on
+  cleanup prompts after finishing their work. Workers also commit with a subject and a short body.
+- The runbook moves intake tickets to in progress one workflow transition at a time with a read-back,
+  instead of "once", which stalled when the workflow had no direct transition.
+- Add a regression test that a closed owner whose liveness alert was already sent is reclaimed at
+  once without a second alert.
+
 ## 0.6.1 - 2026-10-30
 
 - A failed `check-result --requirements` gate now returns `queueWaiting`. A worker that stopped on an
