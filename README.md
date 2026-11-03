@@ -1,6 +1,6 @@
 # dark-factory
 
-A portable harness that runs a ticket-driven software line with agents: a cheap waker decides whether there is work, an expensive orchestrator only directs, workers do the work, deterministic scripts decide "done", and humans are asked only through one-click decision pages.
+A portable harness that runs a ticket-driven software line with agents: a cheap waker decides whether there is work, an expensive orchestrator only directs, workers do the work, deterministic scripts decide "done", and humans are asked only through one configured decision surface: a one-click page by default, or a to-do item they reply to.
 
 > **Cheapest judge first. The orchestrator only directs. Scripts decide done. Humans decide by button.**
 
@@ -39,7 +39,7 @@ flowchart LR
 | cheap model | waker, shadow classifier | wake the line, classify "needs a response?" (logged only until enforced) | change state |
 | orchestrator | expensive model, high reasoning | pick units, write briefs, check verifier JSON, report the whole picture, release the lock | edit code, push, deploy, write to the tracker, record decisions |
 | workers | role → model from config | implement, reproduce, merge, deploy to dev, comment | exceed the runbook's authority |
-| human | decision page | approvals, DB changes, policy choices | relay tickets, logs, or commands |
+| human | decision page or to-do item | approvals, DB changes, policy choices | relay tickets, logs, or commands |
 
 ## Quick start
 
@@ -62,14 +62,19 @@ Schedule `bin/factory-wake` every 30 minutes with any scheduler. With Paseo, a c
 - **CI** (`ci.view_cmd`): print run JSON; map status/result/commit field names in config. `check_deploy` passes only when the build completed, succeeded, and its checkout commit contains the expected commit.
 - **DB** (`decisions.sql.connector_module`, `allowed_config_names`, `expected_host_prefixes`, `forbidden_host_substrings`, `host_query`, `configs.<name>`): an importable DB-API module you supply (no driver is bundled). `sql_runner` checks the host on the same connection before anything runs, refuses forbidden hosts, honours a guard `SELECT`, runs `SELECT/INSERT/UPDATE/DELETE` in order, and rolls back on the first error. **DDL and transaction-control statements are refused** because some databases commit them implicitly, so a rollback could not be guaranteed. Run schema migrations with your migration tool and verify them with a read-only probe.
 - **Preflight** (`preflight.probes`): probes declare `requires` prerequisites; failed prerequisites skip dependent commands. `--fail-fast` marks remaining probes `SKIP`. Idle caches each needs set per tick.
-- **Notifications** (`notify.cmd`): optional argv command with `{message}`. Human waits are grouped and notified once per distinct group per day; failures are recorded without blocking.
+- **Notifications** (`notify.cmd`): optional argv command with `{message}`. Human waits are grouped and notified once per distinct group per day; failures are recorded without blocking. With a to-do decision surface the same alerts also update one `[factory alert] <project>` to-do item.
 - **Ticket comments** (`comments`): comments are written for planners and QA; developer detail goes to a separate note. `python3 -m factory.comment_check lint FILE` gates the converted comment before posting and `readback --comment ID --min-media 1 --min-mention 1` gates the tracker's read-back. Add locale `terms`, `allow`ed words, and `patterns`.
 - **Migrations** (`migrations`): configure repository, migration glob, base/head refs, SQL config, schema, and expected host. `check_migrations` reads schema metadata through the DB connector; nonzero results block approval creation when configured. Unsupported SQL requires human review.
 - **Launcher** (`launcher`): command template that starts an agent with provider/model/thinking/mode and, for workers, returns JSON matching `schemas/worker-result.schema.json`. `list_cmd`, `inspect_cmd`, `archive_cmd`, and `logs_cmd` use `{token}`, `{id}`, and `{key}` substitutions and configurable JSON field/status mappings. Scope the list to one factory state directory, including all worker roles. Cleanup archives only non-running agents belonging to a locally `ended` run token; wake reports success/failure counts.
 
 ## Human decisions
 
-Every human decision is a local page opened in the browser with a one-time token: approve a staging deploy, run an approved data-fix SQL file on a non-production database, or pick an option. The click is the decision. It is appended to `decisions.jsonl` and the line resumes at once (`factory-wake --now --key KEY`). "Hold" records nothing. Production databases are never executed from a page; their SQL is posted to the ticket for the release owner.
+Human decisions appear on one configured surface, `[decisions] surface`:
+
+- `html` (default): a local page opened in the browser with a one-time token: approve a staging deploy, run an approved data-fix SQL file on a non-production database, or pick an option. The click is the decision.
+- `app`, `tui`, `web`: views of the sdlc-kit to-do list (`~/.sdlc/todo.md`; `SDLC_TODO` overrides the file, `SDLC_KIT` the kit path, default `~/.agents/skills/sdlc-kit`; Node 18+). No page or server starts. The decision becomes an item `[decision D<n>] KEY · title` waiting in "Needs you", and the human's reply on it is the decision: `approve` (also `1`, `승인`) for approvals and SQL runs, a number (`2`, `2번`, `D12 2`), option id or label for choices, `hold` (`보류`) to record nothing. Any other reply is asked again on the same item. A watcher (`python3 -m factory.decision_inbox --config CONFIG watch`) polls every minute while an item is open; `decision-request` and every `factory-wake` tick start it.
+
+Either way the decision is appended to `decisions.jsonl` through the same single-use claim and the line resumes at once (`factory-wake --now --key KEY`). "Hold" records nothing. Production databases are never executed from a decision; their SQL is posted to the ticket for the release owner.
 
 ## Safety model
 

@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.7.0 - 2026-11-03
+
+- Add `[decisions] surface = "app" | "tui" | "web" | "html"` (default `html`, validated). `html`
+  keeps the local decision page with one-time-token buttons unchanged. The other three are views of
+  the sdlc-kit to-do list (`~/.sdlc/todo.md`, `SDLC_TODO`, `SDLC_KIT`): `decision-request` starts no
+  page or server and prints `D<n> <to-do id>`; the decision waits as a `[decision D<n>] KEY · title`
+  item and the human's reply on it is the decision for every kind. `approve` (also `1`, `승인`) runs an
+  approval or SQL run, a number (`2`, `2번`, `D12 2`), option id or label picks a choice, `hold`
+  (`보류`) records nothing and closes the item, and anything else is asked again on the same item.
+- New `factory.decision_inbox`: a watcher (`watch`) polls every minute while a decision item is
+  open and records replies through `decision_page.decide` with `by="todo"`, the reply text as note
+  and a per-reply `messageId`, so the single-use claim, audit line, action and focused wake match a
+  click. The decision is recorded before the item is closed; a crash in between is finished on the
+  next cycle without a second record. `decision-request` and every `factory-wake` tick start it.
+- With a to-do surface, alerts sent through `notify.cmd` also update one `[factory alert] <project>`
+  item whose waiting text is the latest alert; a to-do failure never changes the notify status.
+
 ## 0.6.2 - 2026-11-02
 
 - Reconcile the queue with the tracker every tick. The intake scan may report `queueStatuses` for

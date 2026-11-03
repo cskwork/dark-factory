@@ -58,6 +58,9 @@ class Config:
                     re.compile(pattern)
                 except re.error as error:
                     raise ValueError("invalid drain.model_refusal pattern") from error
+        decisions = self.get("decisions", {})
+        if not isinstance(decisions, dict) or decisions.get("surface", "html") not in ("app", "tui", "web", "html"):
+            raise ValueError("invalid decisions.surface: use app, tui, web or html")
         cleanup = self.get("cleanup", {})
         if (not isinstance(cleanup, dict) or not strings(cleanup.get("roots", []))
                 or not strings([cleanup.get("merge_branch_prefix", "merge/")])):

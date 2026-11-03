@@ -211,8 +211,11 @@ def retry_pending_wakes(cfg, wake=None):
     return outcomes
 
 
-def decide(cfg, spec, option, *, actions=None, wake=None):
-    """Persist a one-time claim before any effect; concurrent callers lose."""
+def decide(cfg, spec, option, *, actions=None, wake=None, by="button", note=None, message_id=None):
+    """Persist a one-time claim before any effect; concurrent callers lose.
+
+    The page passes only the option. The to-do surface (decision_inbox) also passes
+    by="todo", the human's reply as note and the reply's message_id."""
     options = {o["id"] for o in spec.get("options", [])} if spec["kind"] == "choice" else {"approve"}
     if option not in options:
         raise ValueError("unknown decision option")
@@ -225,8 +228,11 @@ def decide(cfg, spec, option, *, actions=None, wake=None):
             os.fsync(handle.fileno())
     except FileExistsError:
         return {"status": "used", "ok": False}
-    note = f"Human clicked decision {spec['decision_id']} at {_stamp()}"
-    _audit(cfg, {**base, "event": "decision", "option": option, "by": "button", "note": note})
+    note = note or f"Human clicked decision {spec['decision_id']} at {_stamp()}"
+    decision = {**base, "event": "decision", "option": option, "by": by, "note": note}
+    if message_id:
+        decision["messageId"] = message_id
+    _audit(cfg, decision)
     pending = cfg.state_dir / "decisions" / (spec["decision_id"] + ".wake-pending.json")
     _write(pending, {**base, "wake_pending": True})
     try:
@@ -397,6 +403,13 @@ def main(argv=None):
         retry_pending_wakes(cfg)
     if not args.serve:
         spec = create_request(cfg, spec)
+        from . import decision_inbox
+        if decision_inbox.surface(cfg) != "html":
+            # No page and no server: the decision waits as a to-do item; a reply decides.
+            code, item = decision_inbox.open_item(cfg, spec)
+            decision_inbox.start_watcher(cfg)
+            print(f"{code} {item}", flush=True)
+            return 0
         pages = cfg.state_dir / "decision-pages"
         pages.mkdir(parents=True, exist_ok=True)
         pages.chmod(0o700)

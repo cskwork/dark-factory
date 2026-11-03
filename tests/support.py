@@ -9,6 +9,8 @@ import unittest
 from factory.config import Config
 
 ROOT = Path(__file__).resolve().parents[1]
+# A to-do decision surface must never write the real ~/.sdlc/todo.md from a test.
+os.environ["SDLC_TODO"] = str(Path(tempfile.gettempdir()) / "factory-tests-no-real-todo" / "todo.md")
 
 
 def event(identity="1", **changes):

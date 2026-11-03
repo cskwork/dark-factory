@@ -14,7 +14,7 @@ flowchart LR
   O --> R[Workers by role]
   R --> V[Deterministic verifier JSON]
   V --> O
-  O --> H[Human decision page]
+  O --> H[Human decision page or to-do item]
   H --> D[Decision ledger]
   D --> W
   O --> L[Lessons and weekly retro]
@@ -159,8 +159,8 @@ reproduce. Post the question on the ticket, mention the requester, number each
 question with options and the answer you will assume, and list the attempts.
 Question comments are exempt from the clarity gate but obey every other comment
 rule. Keep one open question per ticket, and wait. If the requester is the
-operator, or the question needs the operator's own decision, use a decision page
-instead of a comment. When fixing starts on an intake ticket, move it to the
+operator, or the question needs the operator's own decision, use a decision request
+(`bin/decision-request`) instead of a comment. When fixing starts on an intake ticket, move it to the
 in-progress status and read the status back. Workflows often have no direct
 transition (backlog → to-do → in progress): take one transition at a time,
 read the status back after each, and decide the next step from the status you
@@ -178,7 +178,7 @@ items. Move it to the to-do status, comment on the original with the new link
 mentioning the reporter, and read all of it back. Record the new key right after
 creation so a rerun resumes instead of creating twice. Skip creation when the
 author announced filing the ticket themselves or a non-release-tracker ticket
-was linked after the comment; ask by decision page when it is unclear whether
+was linked after the comment; ask by decision request when it is unclear whether
 the comment reports a problem. The next intake scan picks up the new ticket.
 
 ## Ticket comments
@@ -366,6 +366,16 @@ bin/decision-request --config factory.toml approval PROJ-123 --title "Promote re
 bin/decision-request --config factory.toml choice PROJ-123 --options-json '[{"id":"wait","label":"Wait"},{"id":"split","label":"Split"}]' --open
 bin/decision-request --config factory.toml sql-run PROJ-123 --sql-config sandbox --file reviewed.sql --expect-host sandbox- --guard-sql "SELECT COUNT(*) FROM items WHERE id=42" --guard-expect 1 --open
 ```
+
+With `[decisions] surface` set to `app`, `tui` or `web`, the same commands print
+`D<n> <to-do id>` instead of a URL: no page or server starts and `--open` is ignored.
+The decision waits as a to-do item `[decision D<n>] KEY · title`; the human's reply
+is the decision (`approve`/`1`/`승인`, a choice number, option id or label, or
+`hold`/`보류`). Unparseable replies are asked again on the same item. The watcher
+`python3 -m factory.decision_inbox --config factory.toml watch` records a reply
+through the same claim, audit line, action and focused wake as a click; every
+factory-wake tick restarts it while an item is open. Never answer a decision item
+yourself or write `human` events to the to-do list.
 
 Decision pages bind to loopback and use a random one-time token; GET cannot
 approve. A human POST consumes the token before side effects, logs the result,

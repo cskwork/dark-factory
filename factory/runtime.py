@@ -419,6 +419,13 @@ def archive_finished(cfg):
 
 
 def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
+    if not dry_run:
+        # Restart the to-do decision watcher after a reboot; html and no open items do nothing.
+        try:
+            from .decision_inbox import start_watcher
+            start_watcher(cfg)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            print(f"factory-wake: decision watcher not started: {type(error).__name__}")
     message, run = guard(cfg, manual=manual, force_refresh=force_refresh)
     print(message)
     if run is None:

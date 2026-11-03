@@ -49,6 +49,17 @@ def previous_workers(directory, guard_at):
 
 
 def notify(cfg, message):
+    status = _notify_command(cfg, message)
+    # A to-do decision surface also shows the latest alert; its failure never changes the status.
+    try:
+        from .decision_inbox import alert
+        alert(cfg, message)
+    except Exception:
+        pass
+    return status
+
+
+def _notify_command(cfg, message):
     command = cfg.get("notify", {}).get("cmd")
     if not command:
         return "disabled"

@@ -166,6 +166,15 @@ requires = ["network"]
 cmd = ["python3", "adapters/probe.py", "service"]
 human_exit_codes = [10]
 
+# Where a human decides: "html" (default) opens a local decision page with one-time-token
+# buttons. "app", "tui" and "web" are views of the sdlc-kit to-do list (~/.sdlc/todo.md;
+# SDLC_TODO overrides the file, SDLC_KIT the kit, default ~/.agents/skills/sdlc-kit; needs
+# Node 18+). With a to-do surface no page or server starts: each decision is a waiting
+# "[decision D<n>]" item and the human's reply is the decision ("approve", a number, an option
+# id or label, or "hold"). notify.cmd alerts also update one "[factory alert]" item.
+[decisions]
+surface = "html"
+
 [decisions.approval]
 on_approve = ["python3", "adapters/approve.py", "--key", "{key}", "--decision", "{decision_id}", "--note", "{note}"]
 
