@@ -1,6 +1,7 @@
 """Run configured prerequisite probes; report PASS, HUMAN (10), or DOWN (20)."""
 
 import json
+import re
 import subprocess
 import time
 
@@ -53,6 +54,14 @@ def check_environment(cfg, needs=None, fail_fast=False):
                                                   or required not in probes for required in requires):
             raise CheckError("invalid-preflight-requires")
         cfg.command(probe["cmd"])
+        if "stdout_pattern" in probe:
+            pattern = probe["stdout_pattern"]
+            if not isinstance(pattern, str) or not pattern:
+                raise CheckError("invalid-preflight-stdout-pattern")
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise CheckError("invalid-preflight-stdout-pattern") from error
     _probe_order(probes, probes)
     names = _probe_order(probes, names)
     results, by_name, stopped = [], {}, False
@@ -74,6 +83,10 @@ def check_environment(cfg, needs=None, fail_fast=False):
             code = completed.returncode
             status = "PASS" if code == 0 else ("HUMAN" if code in probe.get("human_exit_codes", []) else "DOWN")
             reason = "ok" if code == 0 else "command-failed"
+            if code == 0 and "stdout_pattern" in probe:
+                lines = [line.strip() for line in (completed.stdout or "").splitlines() if line.strip()]
+                if not lines or any(re.fullmatch(probe["stdout_pattern"], line) is None for line in lines):
+                    status, reason = "DOWN", "invalid-command-list"
         except subprocess.TimeoutExpired:
             code, status, reason = None, "DOWN", "timeout"
         except OSError:

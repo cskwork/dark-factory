@@ -167,15 +167,21 @@ def main(argv=None):
     content.add_argument("--json", type=json.loads, dest="row")
     consume = commands.add_parser("consume-pending", parents=[common])
     consume.add_argument("--lines", type=json.loads, required=True)
+    lesson = commands.add_parser("lesson", parents=[common])
+    lesson.add_argument("--json", type=json.loads, required=True, dest="row")
     args = parser.parse_args(argv)
     try:
-        directory = load_config(getattr(args, "config", None)).state_dir
+        cfg = load_config(getattr(args, "config", None))
+        directory = cfg.state_dir
         if args.command == "patch":
             print(json.dumps(patch(directory, args.filename, args.path, args.values, args.delete)))
         elif args.command == "append-pending":
             if args.row is not None and not isinstance(args.row, dict):
                 raise ValueError("pending focus JSON must be an object")
             append_pending(directory, args.line if args.line is not None else json.dumps(args.row))
+        elif args.command == "lesson":
+            from .lessons import append_lesson
+            print(json.dumps(append_lesson(cfg, args.row)))
         else:
             print(consume_pending(directory, args.lines))
         return 0

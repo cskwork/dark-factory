@@ -1,8 +1,10 @@
 """Deferrals require real worker progress; backoff applies to individual items."""
 from datetime import date
+import json
 import time
 from unittest.mock import patch
 from factory import idle
+from factory.decision_page import create_request
 from factory.drain import iso
 from factory.runtime import guard
 from factory.state import BOOKKEEPING, item_digest, patch as patch_state
@@ -17,6 +19,12 @@ class DrainIdleTests(Fixture):
         notify = patch.object(idle, "notify", side_effect=lambda cfg, text: self.notifications.append(text) or "sent")
         notify.start()
         self.addCleanup(notify.stop)
+        # Three stuck items now escalate. Keep the decision surface offline while
+        # retaining its actual request registry and duplicate prevention.
+        decisions = patch("factory.lessons.open_request", side_effect=lambda cfg, path:
+                          create_request(cfg, json.loads(path.read_text())))
+        decisions.start()
+        self.addCleanup(decisions.stop)
 
     def prior_run(self, workers=1, defer_count=1):
         self.write("queue.json", {f"PROJ-{index}": {"waiting": None, "stage": "tobe"} for index in range(4)})
@@ -45,6 +53,9 @@ class DrainIdleTests(Fixture):
         self.assertEqual(code, 0)
         self.assertIn("stuck-runnable:PROJ-1", result["stuck"])
         self.assertEqual(len(self.notifications), 3)
+        requests = list((self.state / "decisions").glob("*.request.json"))
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(json.loads(requests[0].read_text())["recommended"], "fix-now")
 
     def test_four_deferrals_are_stuck_and_notify_once_per_item(self):
         self.prior_run(defer_count=4)

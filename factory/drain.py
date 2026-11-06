@@ -337,7 +337,7 @@ def output_text(*paths):
 
 
 def rate_limited(*paths):
-    return bool(re.search(r"rate[ -]?limit|\b429\b|\boverloaded\b", output_text(*paths), re.I))
+    return bool(re.search(r"rate[ -]?limit|\b429\b|\boverloaded\b|\bat capacity\b", output_text(*paths), re.I))
 
 
 def model_refusal(cfg, *paths):

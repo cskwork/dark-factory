@@ -111,6 +111,21 @@ and `key_label_args` to convey ownership; key arguments are omitted for keyless
 units. Configure `parent_env_keys` for daemon parent variables to remove from
 worker launches, so workers survive an orchestrator's failure independently.
 
+`[worker].env` is a string map applied to worker launches only (default `{}`).
+The example sets `BLAST_RADIUS_UNATTENDED="1"` to tell confirm-dialog hooks
+that nobody is attending. For a daemon runner, configure `launcher.env_args`
+(example `["--env", "{name}={value}"]`; default `[]`) to forward those strings
+to the actual agent; direct runners can inherit the child process environment.
+Each worker has a unique `{attempt}`. Configure `attempt_label_args` or the
+launch command to label it, and expose that label in list results or use a
+list command scoped by `{attempt}`. `launcher.fields.attempt` maps a custom field.
+After a missing or invalid result, `cancel_cmd` must target `{id}`. The wrapper
+cancels only running agents matching this attempt, run and key, then queries
+again. It records `cancelled: <id>` only after confirming a non-running state.
+`cancellation.json` and `invocation.json.cancellation` preserve the receipt;
+failed cancellation is explicit. Missing cancel configuration or attempt
+identity records `cancel-unavailable`; no process-pattern kill is attempted.
+
 `launcher.list_cmd`, `inspect_cmd`, `archive_cmd`, and `logs_cmd` are trusted argv
 templates with `{token}`, `{id}`, and `{key}` substitutions. List all roles,
 including archived agents, within this factory's scope. Give every state directory
@@ -309,7 +324,7 @@ Use `python3 -m factory.drain --config CONFIG --token TOKEN COMMAND`:
   --key KEY`: persist deferral or successful progress. Repeating a deferral in
   one run counts once. Success clears backoff and deferral metadata.
 - `check-result --key KEY --result FILE [--stderr FILE]`: rate limit, 429,
-  or overloaded is infrastructure failure and is excluded from model retries.
+  overloaded, or at capacity is infrastructure failure and is excluded from model retries.
   With `[drain.model_refusal]`, output matching every configured pattern (for
   example a schema failure caused by a provider's cybersecurity filter) returns
   `failureType=model-refusal`, `retryAllowed=true` and `retryWorker=ROLE`, even
@@ -395,8 +410,17 @@ rolls back. Secrets belong in an ignored local config or connector, never a page
 
 ## Lessons
 
-Append `{at,key,observation,evidence,proposal}` to lessons.jsonl. Run the retro
-weekly to propose a reviewed improvement branch. Humans merge harness changes.
+Use `python3 -m factory.state --config CONFIG lesson --json
+'{"kind":"infra_fail","key":"PROJ-123","what":"Verifier unavailable","evidence":"verify.json","proposal":"Repair the adapter"}'`.
+All writers use `factory.lessons.append_lesson`; never append lessons directly.
+Legacy `observation` fields remain readable. The signature combines kind and
+normalized what, stripping changing keys, SHAs, numbers, timestamps and comment
+ids. `[lessons]` defaults to `escalate_count=3`, `window_days=14`,
+`cooldown_days=7`, all positive integers. Three repeats in fourteen days open
+one existing decision request: fix-now (recommended), accept or ignore. An open
+request suppresses duplicates; an answer suppresses requests for seven days.
+Run the retro weekly to propose a reviewed improvement branch and open each
+user decision with a recommended option (see the retro template). Humans merge harness changes.
 All shipped tests are offline: `python3 -m unittest discover -s tests -v`.
 
 ## Monitoring, completion evidence and observed measurements
@@ -482,6 +506,21 @@ plus all matching environment values. Missing/FAIL/SKIP/duplicate checks,
 wrong key/stage/environment or unreadable evidence block completion. Gate JSON
 retains passedChecks and failures with retryAllowed=false on failure. Existing
 callers without a manifest retain their schema/behavior.
+
+Event units may additionally declare:
+
+```json
+{"event":{"commentIds":["PROJ-123:42"],"stateArtifact":"state.json","queueArtifact":"queue.json"}}
+```
+
+Add this object to the manifest above; list the state and queue artifacts in the
+result. `state.json` uses root `handled`, as written by triage. Every declared id
+requires a record with the manifest key, nonempty `action`, and nonempty `at`
+(string or finite epoch timestamp). Missing or invalid evidence yields
+`event-not-handled`. A `status=done` event may retain `waiting`; its result stage
+may match the declaration or that key's stage in the listed queue artifact.
+`queueArtifact` is optional. Verifier checks remain mandatory, and non-event
+completion still requires the declared stage and null `waiting`.
 
 Workers must not advance a declared queue stage. After the wrapper succeeds,
 the orchestrator independently runs `factory.drain ... check-result --key KEY

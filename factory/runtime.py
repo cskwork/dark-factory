@@ -13,6 +13,7 @@ import uuid
 from .config import StateDirectoryError, load_config
 from .idle import decide, pending_focus
 from .state import append_json, locked, read_object, write_json
+from .lessons import append_lesson
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,21 +57,23 @@ def _adapter(cfg, kind, **values):
     if template is None:
         raise ValueError("missing launcher " + kind + "_cmd")
     response = cfg.run(template, token=values.get("token", ""),
-                       id=values.get("id", ""), key=values.get("key", ""))
+                       id=values.get("id", ""), key=values.get("key", ""),
+                       attempt=values.get("attempt", ""))
     if response.returncode:
         raise ValueError("launcher query failed")
     return response.stdout
 
 
-def agents(cfg, token, key=None, archived=True, strict=True):
-    """Require exact run labels unless the adapter itself scopes to the token."""
+def agents(cfg, token, key=None, archived=True, strict=True, attempt=None):
+    """Require exact run/attempt labels unless the adapter itself scopes the query."""
     settings = cfg.get("launcher", {})
     template = settings.get("list_cmd")
     parts = shlex.split(template) if isinstance(template, str) else template
     if not isinstance(parts, list):
         raise ValueError("invalid list_cmd")
     token_scoped = any(isinstance(p, str) and "{token}" in p for p in parts)
-    value = json.loads(_adapter(cfg, "list", token=token, key=key or ""))
+    attempt_scoped = any(isinstance(p, str) and "{attempt}" in p for p in parts)
+    value = json.loads(_adapter(cfg, "list", token=token, key=key or "", attempt=attempt or ""))
     if settings.get("list_field"):
         value = _field(value, settings["list_field"])
     elif isinstance(value, dict):
@@ -96,7 +99,10 @@ def agents(cfg, token, key=None, archived=True, strict=True):
             raise ValueError("invalid agent fields")
         if not isinstance(labels, dict):
             raise ValueError("invalid agent labels")
-        if labels.get("run", token if token_scoped else None) != token:
+        if (token or not attempt) and labels.get("run", token if token_scoped else None) != token:
+            continue
+        if attempt and _field(row, fields.get("attempt", "attempt"),
+                              labels.get("attempt", attempt if attempt_scoped else None)) != attempt:
             continue
         row_key = _field(row, fields.get("key", "key"), labels.get("key"))
         if key and row_key != key:
@@ -214,8 +220,8 @@ def _busy(cfg, current, now):
         return True
     mark_run(cfg, current["token"], "lost")
     append_json(cfg.state_dir / "runs.jsonl", {"at": now, "action": "lost-run", "token": current["token"]})
-    append_json(cfg.state_dir / "lessons.jsonl", {"at": now, "kind": "infra_fail", "what": "lost-run: " + current["token"],
-                                                 "evidence": str(run_path(cfg, current["token"]))})
+    append_lesson(cfg, {"at": now, "kind": "infra_fail", "what": "lost-run: " + current["token"],
+                        "evidence": str(run_path(cfg, current["token"]))})
     _clear_lock(cfg)
     return False
 
@@ -366,7 +372,7 @@ def release_run(cfg, run, retry=False, unlaunched=False):
                     write_json(cfg.state_dir / "guard-state.json", state)
 
 
-def launcher(cfg, role, token=None, key=None):
+def launcher(cfg, role, token=None, key=None, attempt=None):
     roles = cfg.get("roles", {})
     if role in ("waker", "orchestrator"):
         mapping = roles.get(role)
@@ -376,13 +382,15 @@ def launcher(cfg, role, token=None, key=None):
                                               for k in ("provider", "model", "thinking", "mode")):
         raise ValueError("unknown or invalid role")
     template = cfg.get("launcher", {}).get("command", DEFAULT_LAUNCHER)
-    context = {**mapping, "role": role, "token": token or "", "key": key or ""}
+    context = {**mapping, "role": role, "token": token or "", "key": key or "", "attempt": attempt or ""}
     command = cfg.command(template, **context)
     settings = cfg.get("launcher", {})
     if token and settings.get("run_label_args"):
         command += cfg.command(settings["run_label_args"], **context)
     if key and settings.get("key_label_args"):
         command += cfg.command(settings["key_label_args"], **context)
+    if attempt and settings.get("attempt_label_args"):
+        command += cfg.command(settings["attempt_label_args"], **context)
     return command
 
 
@@ -501,6 +509,50 @@ def validate_worker(value):
     return value
 
 
+def cancel_worker(cfg, attempt, token=None, key=None):
+    """Cancel only this attempt's running agents and independently confirm their stop."""
+    cancelled, messages = [], []
+    settings = cfg.get("launcher", {})
+    template = settings.get("cancel_cmd")
+    identity_args = [settings.get("command", DEFAULT_LAUNCHER), settings.get("attempt_label_args", [])]
+    attempt_identified = any("{attempt}" in value if isinstance(value, str) else
+                             isinstance(value, list) and any(isinstance(part, str) and "{attempt}" in part for part in value)
+                             for value in identity_args)
+    if template is None:
+        messages.append("cancel-unavailable: launcher.cancel_cmd is not configured")
+    elif not attempt_identified:
+        messages.append("cancel-unavailable: launcher must label the worker with {attempt}")
+    else:
+        try:
+            parts = shlex.split(template) if isinstance(template, str) else template
+            if not isinstance(parts, list) or not any(isinstance(part, str) and "{id}" in part for part in parts):
+                raise ValueError("cancel_cmd must target {id}")
+            rows = agents(cfg, token or "", key=key, attempt=attempt)
+        except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+            messages.append(f"cancel failed: attempt={attempt}: {type(error).__name__}: {str(error)[:300]}")
+        else:
+            for row in rows:
+                identity = row["id"]
+                if row["status"] != "running" or identity in cancelled:
+                    continue
+                try:
+                    _adapter(cfg, "cancel", token=token or "", id=identity, key=key or "", attempt=attempt)
+                    confirmed = next((item for item in agents(cfg, token or "", key=key, attempt=attempt)
+                                      if item["id"] == identity), None)
+                    if confirmed is None or confirmed["status"] == "running":
+                        raise ValueError("agent still running or stop unconfirmed")
+                    cancelled.append(identity)
+                    messages.append("cancelled: " + identity)
+                except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+                    messages.append(f"cancel failed: {identity}: {type(error).__name__}: {str(error)[:300]}")
+    for message in messages:
+        if not message.startswith("cancel-unavailable"):
+            print("factory-worker: " + message, file=sys.stderr)
+    return {"cancelledAgents": cancelled,
+            "cancellationFailed": any(message.startswith(("cancel failed:", "cancel-unavailable")) for message in messages),
+            "summary": "; ".join(messages)}
+
+
 def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="unit", requirements=None):
     if role not in cfg.get("roles", {}).get("workers", {}):
         raise ValueError("unknown worker role")
@@ -527,9 +579,14 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     declaration = snapshot(requirements) if requirements else None
     if declaration and key is not None and declaration['manifest']['key'] != key:
         raise ValueError("requirements key mismatch")
-    command = launcher(cfg, role, token=token, key=key)
     text = Path(brief).read_text()
     attempt_id = uuid.uuid4().hex
+    command = launcher(cfg, role, token=token, key=key, attempt=attempt_id)
+    worker_env = cfg.get("worker", {}).get("env", {})
+    env_args = cfg.get("launcher", {}).get("env_args", [])
+    for name, value in worker_env.items():
+        if env_args != []:
+            command += cfg.command(env_args, name=name, value=value)
     attempt = (run_path(cfg, token) / "attempts" / attempt_id if token else
                cfg.state_dir / "worker-attempts" / attempt_id)
     attempt.mkdir(parents=True, exist_ok=False)
@@ -545,9 +602,10 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
               f"factory-guard --config {shlex.quote(str(cfg.path))} --owns {shlex.quote(token or 'legacy')}; "
               "stop immediately if ownership is lost. Write queue.json, state.json and approvals.json only "
               "through python3 -m factory.state patch with --config, using a key-level patch. "
-              "Append journal and lessons records only; never rewrite existing records. "
+              "Append journal records only; write lessons through python3 -m factory.state "
+              "lesson --config CONFIG --json ROW, never append lessons directly or rewrite existing records. "
               "Stop at a stage boundary before timeout, record the stage and evidence. "
-              "Treat rate limit, 429 or overloaded as an infrastructure failure: use status=failed, "
+              "Treat rate limit, 429, overloaded or at capacity as an infrastructure failure: use status=failed, "
               "state infra rate-limit in summary, and do not retry in this unit. "
               "Save verifier JSON and include paths in artifacts. Report unverified work explicitly. "
               f"checkpoint_path={json.dumps(str(checkpoint))} "
@@ -566,6 +624,7 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     command += ["--title", title, "--wait-timeout", timeout,
                 "--output-schema", str(ROOT / "schemas/worker-result.schema.json"), prompt]
     env = dict(os.environ)
+    env.update(worker_env)
     for name in cfg.get("launcher", {}).get("parent_env_keys", ["PASEO_AGENT_ID", "PASEO_WORKSPACE_ID"]):
         env.pop(name, None)
     started = time.time()
@@ -574,6 +633,7 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     process_code = None
     value, saved, gate = None, None, None
     validation_error = None
+    cancellation = None
     expected_key = key if key is not None else declaration["manifest"]["key"] if declaration else None
     def valid_result(raw):
         result = validate_worker(json.loads(raw))
@@ -636,6 +696,9 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     except (OSError, ValueError, TypeError, KeyError):
         code, process_error = 2, "worker-evidence-recording-failed"
     finally:
+        if value is None and saved is None:
+            cancellation = cancel_worker(cfg, attempt_id, token=token, key=key)
+            write_json(attempt / "cancellation.json", cancellation)
         ended = time.time()
         mapping = cfg.get("roles", {}).get("workers", {}).get(role, {})
         metadata = {"attemptId": attempt_id, "key": key, "unit": unit, "role": role,
@@ -649,11 +712,15 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
                     "stage": (value or saved or {}).get("stage"),
                     "observations": {}, "metrics": {name: None for name in
                     ("tokens", "costUsd", "waitSeconds", "humanInterventions", "reworkCount")}}
+        if cancellation is not None:
+            metadata["cancellation"] = cancellation
         write_json(attempt / "invocation.json", metadata)
     if validation_error is not None:
         raise validation_error
     if process_error:
         failure = {"error": process_error, "invocation": str(attempt / "invocation.json"), "retryAllowed": False}
+        if cancellation is not None:
+            failure["cancellation"] = cancellation
         if saved is not None:
             failure.update(checkpoint=str(attempt / "checkpoint-validated.json"), result=saved)
         if gate is not None:

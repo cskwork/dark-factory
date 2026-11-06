@@ -11,6 +11,7 @@ from .config import StateDirectoryError, load_config
 from .state import BOOKKEEPING, append_json, item_digest, read_object, transaction, write_json
 from .drain import backoff_active, epoch
 from .triage import triage
+from .lessons import append_lesson
 
 
 def content_hash(value):
@@ -46,6 +47,11 @@ def previous_workers(directory, guard_at):
     if type(workers) is not int or workers < 0:
         raise ValueError("invalid workers count")
     return workers
+
+
+def record_error(errors, error):
+    if errors is not None:
+        errors.append(f"{type(error).__name__}: {str(error)[:300]}")
 
 
 def notify(cfg, message):
@@ -112,7 +118,7 @@ def record_scan_failure(cfg, state, now, count, failure, elapsed, cooldown=True)
                  retryAt=ladder if cooldown else None, durationSeconds=elapsed,
                  cooldown=False, attemptStartedAt=None)
     if state["failureCount"] >= SCAN_ALERT_FAILURES and not state.get("alerted"):
-        append_json(cfg.state_dir / "lessons.jsonl", {
+        append_lesson(cfg, {
             "at": now, "key": None, "kind": "infra_fail",
             "observation": "Intake scan failed " + str(state["failureCount"]) + " times in a row: " + failure,
             "evidence": str(cfg.state_dir / "scan-state.json"),
@@ -155,7 +161,7 @@ def source_health(state, scan, now):
     return "available" if all(v == "available" for v in statuses) else ("unavailable" if all(v == "unavailable" for v in statuses) else "degraded")
 
 
-def scan_intake(cfg, now, force_refresh=False):
+def scan_intake(cfg, now, force_refresh=False, *, errors=None):
     """Only whole-command failure cools down an adapter; sources are descriptive."""
     path = cfg.state_dir / "scan-state.json"
     state = read_object(path)
@@ -240,8 +246,8 @@ def scan_intake(cfg, now, force_refresh=False):
         try:
             record_scan_failure(cfg, state, now, count, label,
                                 time.monotonic() - started, cooldown=False)
-        except OSError:
-            pass  # The original failure matters more than its bookkeeping.
+        except OSError as bookkeeping_error:
+            record_error(errors, bookkeeping_error)
         raise
 
 
@@ -294,8 +300,8 @@ def human_summary(waits):
     return "\n".join(lines)
 
 
-def decide(cfg, classifier=None, force_refresh=False):
-    result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": [], "shouldWake": True, "timings": {}}
+def _decide(cfg, classifier=None, force_refresh=False):
+    result = {"idle": False, "reasons": [], "events": 0, "queue": {}, "stuck": [], "waitingHuman": [], "shouldWake": True, "timings": {}, "internalErrors": []}
     now = time.time()
     reasons = result["reasons"]
     try:
@@ -308,7 +314,7 @@ def decide(cfg, classifier=None, force_refresh=False):
             reasons.append("pending-focus")
         # Always use this invocation's stdout; an old empty scan is never evidence.
         (cfg.state_dir / "scan.json").unlink(missing_ok=True)
-        scan, health, monitoring = scan_intake(cfg, now, force_refresh)
+        scan, health, monitoring = scan_intake(cfg, now, force_refresh, errors=result["internalErrors"])
         result["sourceHealth"] = health
         result["timings"]["scanSeconds"] = health.get("durationSeconds") if not health.get("cooldown") else 0
         reasons.extend(monitoring)
@@ -402,7 +408,7 @@ def decide(cfg, classifier=None, force_refresh=False):
                 if stuck:
                     result["stuck"].append("stuck-runnable:" + key)
                     if not old.get("reported"):
-                        append_json(cfg.state_dir / "lessons.jsonl", {
+                        append_lesson(cfg, {
                             "at": time.time(), "key": key, "kind": "infra_fail",
                             "observation": "Runnable item unchanged after orchestrator wake",
                             "evidence": digest, "proposal": "Execute nextStep or update needs/waiting"})
@@ -481,12 +487,24 @@ def decide(cfg, classifier=None, force_refresh=False):
             return result, 1
         result.update(idle=True, shouldWake=False, reasons=["no-events", "no-runnable-work"])
         return result, 0
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+        record_error(result["internalErrors"], error)
         result["shouldWake"] = True
         reasons.append("internal-error")
         return result, 2
-    finally:
+
+
+def decide(cfg, classifier=None, force_refresh=False):
+    result, code = _decide(cfg, classifier, force_refresh)
+    try:
         write_json(cfg.state_dir / "guard-last.json", {"at": time.time(), **result})
+    except (OSError, ValueError) as error:
+        record_error(result["internalErrors"], error)
+        result.update(idle=False, shouldWake=True)
+        if "internal-error" not in result["reasons"]:
+            result["reasons"].append("internal-error")
+        code = 2
+    return result, code
 
 
 def main(argv=None):

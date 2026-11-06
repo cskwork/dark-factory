@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.8.0 - 2026-11-06
+
+- Accept caller-declared event completion when every comment has same-key handled
+  evidence, even while the ticket waits. Listed queue evidence may supply its
+  stage; non-event units and all verifier checks stay strict, preventing completed
+  replies from repeatedly failing the completion gate.
+- Route every lesson through one serialized writer and state CLI. Normalize changing
+  identifiers and open a recommended fix-now / accept / ignore decision after three
+  occurrences in fourteen days, with open-request deduplication and a seven-day
+  post-answer cooldown. Configurable thresholds turn recurring failures into a
+  concrete user choice instead of more log lines.
+- Require weekly-retro user choices to open on the decision surface with a recommended
+  option and evidence, so proposals do not remain unanswered in a report.
+- Preserve exception type and up to 300 message characters in guard diagnostics,
+  including state-write failures, so internal errors can be diagnosed.
+- Classify model-at-capacity responses as rate limits, so infrastructure shortages
+  use the existing item backoff instead of a model retry.
+- Add configurable worker environment strings (empty by default) and exact-agent
+  cancellation with stopped-state confirmation after invalid or missing results.
+  Explicit cancel failures and unavailable adapters prevent silent overlapping agents.
+- Add optional full-line regex validation to existing preflight command probes,
+  requiring a nonempty listing so an empty or malformed successful command cannot
+  establish readiness. Existing exit-only probes retain their behavior.
+
 ## 0.7.0 - 2026-11-03
 
 - Add `[decisions] surface = "app" | "tui" | "web" | "html"` (default `html`, validated). `html`

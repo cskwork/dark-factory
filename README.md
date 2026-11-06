@@ -89,7 +89,11 @@ Either way the decision is appended to `decisions.jsonl` through the same single
 
 ## Getting better on its own
 
-Worker failures, verifier failures, review rejections, new human waits, and reviewers' non-blocking notes are appended to `lessons.jsonl`. A weekly retro (template in `templates/RETRO.template.md`) groups repeats, prefers a new verifier over a new rule, and pushes a `retro/YYYYMMDD` branch with tests. It never merges or changes its own authority.
+Worker failures, verifier failures, review rejections, new human waits, and reviewers' non-blocking notes use the shared `factory.lessons` writer through `python3 -m factory.state --config CONFIG lesson --json '{"kind":"infra_fail","what":"Verifier unavailable","key":"PROJ-123"}'`. It appends to `lessons.jsonl` and groups kind + normalized what, ignoring changing ticket keys, SHAs, numbers, timestamps and comment ids.
+
+At **3 occurrences in 14 days**, it opens one decision with **fix-now (recommended)**, accept and ignore. Open decisions are reused; an answer prevents another request for **7 days**. Configure positive integer thresholds in `[lessons]`.
+
+A weekly retro (template in `templates/RETRO.template.md`) groups repeats, prefers a new verifier over a new rule, and prepares a `retro/YYYYMMDD` branch with tests. Each user decision also opens through `bin/decision-request` with a recommended option; the report cites existing recurring-lesson decisions instead of duplicating them. Humans review and merge; publication requires authorization.
 
 ## State and drain operations
 
@@ -109,9 +113,34 @@ the orchestrator but are counted as `scan-malformed`, and three consecutive fail
 any kind raise one deduplicated lesson and notification. Workers now retain unique pre-cleanup checkpoints and invocation
 records even on failure. Caller --requirements manifests gate declared stage
 completion against saved verifier JSON; old worker JSON stays unchanged.
+An optional manifest `event` binds `commentIds` to a listed `stateArtifact`:
+`state.json` must contain `handled[id]` with the same key and nonempty `action` and
+`at` for every id. A `done` event unit may retain its queue wait; missing records
+fail with `event-not-handled`. Its stage may match the declaration or the key's
+stage in an optional listed `queueArtifact`. Non-event units still require the
+declared stage and null waiting, and all declared verifier checks remain mandatory.
 Summary --invocation/--observations records measured provenance, known coverage
 and unknown cost/tokens without estimates. See the runbook's “Monitoring,
 completion evidence and observed measurements” for contracts and CLI examples.
+
+`[worker].env` adds environment strings to worker agent launches (default `{}`).
+The example sets `BLAST_RADIUS_UNATTENDED = "1"` to tell confirm-dialog hooks that
+nobody is attending. On an invalid or missing result, a still-running agent is
+cancelled through `[launcher].cancel_cmd` and inspected to confirm it stopped;
+the receipt records `cancelled: <id>` only after confirmation. Cancellation failures
+are reported. With no cancel adapter, the receipt records `cancel-unavailable`;
+configure one before unattended use. No process-pattern kill is used.
+Configure `attempt_label_args` (or the launch command) with `{attempt}` and expose
+that label in listing results to identify only this invocation. `launcher.env_args`
+adapts environment flags (default `[]`; the example uses `--env NAME=VALUE`) for daemon-backed agents;
+the wrapper also supplies these strings in its child process environment.
+
+Guard diagnostics retain exception type and at most **300 message characters** in
+`internalErrors`. Capacity responses such as `Selected model is at capacity` use
+the existing per-item rate-limit backoff. Configured preflight command probes may
+set `stdout_pattern`: exit zero then requires at least one nonblank line and a
+full regex match for every line; otherwise the probe is DOWN. Existing exit-only
+probes are unchanged, and raw listing output is never included in verifier JSON.
 
 ## License
 

@@ -65,6 +65,21 @@ class Config:
         if (not isinstance(cleanup, dict) or not strings(cleanup.get("roots", []))
                 or not strings([cleanup.get("merge_branch_prefix", "merge/")])):
             raise ValueError("invalid cleanup settings")
+        lessons = self.get("lessons", {})
+        if not isinstance(lessons, dict):
+            raise ValueError("invalid lessons settings")
+        for name, default in (("escalate_count", 3), ("window_days", 14), ("cooldown_days", 7)):
+            value = lessons.get(name, default)
+            if type(value) is not int or value <= 0:
+                raise ValueError("invalid lessons." + name)
+        worker = self.get("worker", {})
+        if not isinstance(worker, dict):
+            raise ValueError("invalid worker settings")
+        env = worker.get("env", {})
+        if (not isinstance(env, dict) or any(
+                not isinstance(name, str) or not name or "=" in name or "\0" in name
+                or not isinstance(value, str) or "\0" in value for name, value in env.items())):
+            raise ValueError("invalid worker.env")
 
     @staticmethod
     def resolve(value, parent):

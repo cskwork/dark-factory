@@ -14,6 +14,15 @@ launch_timeout_seconds = 60
 worker_timeout_seconds = 5500
 runbook = "templates/RUNBOOK.template.md"
 
+[worker]
+# Tell confirm-dialog hooks that nobody is attending. Default: an empty map.
+env = { BLAST_RADIUS_UNATTENDED = "1" }
+
+[lessons]
+escalate_count = 3
+window_days = 14
+cooldown_days = 7
+
 # Owner liveness is opt-in for existing configurations. Both switches can also
 # be disabled by writing off to state_dir/liveness or 0 to state_dir/drain.
 [liveness]
@@ -45,9 +54,14 @@ prd = "origin/main"
 list_cmd = ["paseo", "agent", "ls", "--json", "-a", "--label", "factory=example"]
 inspect_cmd = ["paseo", "agent", "inspect", "{id}", "--json"]
 archive_cmd = ["paseo", "agent", "archive", "{id}"]
+# Optional adapter: cancel only the exact agent, then inspect/list to confirm it stopped.
+cancel_cmd = ["paseo", "stop", "{id}", "--json"]
 logs_cmd = ["paseo", "agent", "logs", "{id}"]
 run_label_args = ["--label", "run={token}"]
 key_label_args = ["--label", "key={key}"]
+attempt_label_args = ["--label", "attempt={attempt}"]
+# Adapt these flags if your runner uses a different way to pass agent environment.
+env_args = ["--env", "{name}={value}"]
 parent_env_keys = ["PASEO_AGENT_ID", "PASEO_WORKSPACE_ID"]
 command = ["paseo", "run", "--provider", "{provider}", "--model", "{model}", "--thinking", "{thinking}", "--mode", "{mode}", "--cwd", "{cwd}", "--label", "factory=example", "--label", "role={role}"]
 
@@ -165,6 +179,12 @@ human_action = "Connect the required network"
 requires = ["network"]
 cmd = ["python3", "adapters/probe.py", "service"]
 human_exit_codes = [10]
+
+# Optional listing probe: success requires at least one nonblank line, with every
+# line matching the full regex. Output stays out of verifier JSON.
+# [preflight.probes.resources]
+# cmd = ["python3", "adapters/list_resources.py"]
+# stdout_pattern = 'resource/[a-z0-9-]+'
 
 # Where a human decides: "html" (default) opens a local decision page with one-time-token
 # buttons. "app", "tui" and "web" are views of the sdlc-kit to-do list (~/.sdlc/todo.md;
