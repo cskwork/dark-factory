@@ -218,3 +218,27 @@ head = "HEAD"
 sql_config = "sandbox"
 expect_host = "sandbox-"
 default_schema = "sandbox"
+
+# Optional judge: an independent model answers low-risk decisions; omit the table to keep it
+# off. state_dir/judge (off|shadow|on) overrides mode; on a to-do surface the pinned
+# "[factory] judge: on|off" item switches it. {schema} expands to the verdict JSON schema;
+# stdout may be the verdict JSON or a Claude envelope with structured_output.
+[judge]
+mode = "on"
+command = ["claude", "-p", "--model", "claude-opus-5-5", "--effort", "medium", "--output-format", "json", "--no-session-persistence", "--allowedTools", "Read", "Grep", "Glob", "--json-schema", "{schema}"]
+timeout_seconds = 900
+min_confidence = 0.8
+human_only = ["security-plan", "product-scope", "prod-data"] # choice humanReason values only a person answers
+risk_per_key_per_day = 2
+setting_title = "[factory] judge"
+
+# Promotion approval from the tracker: approved by=judge when someone other than the operator
+# moved the ticket to qa_done_status after the operator's latest result comment (with media).
+# facts_cmd prints the tracker JSON described in the README; comment_cmd reads the comment on
+# stdin and prints the new comment id. Reporter waits at these stages resume on that status.
+[judge.promotion]
+qa_done_status = "QA done"
+stages = ["promotion"]
+facts_cmd = ["python3", "adapters/tracker_facts.py", "{key}"]
+comment_cmd = ["python3", "adapters/tracker_comment.py", "{key}"]
+nudge_template = "{reporter} The change is deployed and its result is in the comment above. If it works for you, please move this ticket to '{status}'; the factory then continues automatically. If something needs fixing, reply here."

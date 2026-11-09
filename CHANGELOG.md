@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0 - 2026-11-09
+
+- Add an optional judge (`factory.judge`, `[judge]`): an independent model answers decisions
+  that do not need a person. It writes the strongest argument against the recommendation
+  first, follows the user's past decisions on the key (more verification over less), and
+  decides only at risk=low, confidence at least `min_confidence` (0.8) and an existing
+  option; a model failure escalates. Without the section it is off, so an unconfigured
+  factory never calls a model or posts a comment. `state_dir/judge` (`off|shadow|on`)
+  overrides `[judge] mode`; `shadow` logs verdicts to `judge.jsonl` without applying them.
+- Choices are judged detached while the request holds its decision id: decided is recorded
+  `by=judge` and wakes the line like a human decision; escalated opens the human item or
+  page under the same id. New optional choice field `humanReason`; values in `human_only`
+  (`security-plan`, `product-scope`, `prod-data`) and every `sql-run` stay human.
+- The guard judges `human-risk` waits that carry the new optional `question` and `suggest`
+  fields: accepted items resume with a `[<time> judge]` note. Each question is judged once,
+  at most twice per key per day; leased keys and concurrently changed items are left alone.
+- Promotion approval from the tracker (`[judge.promotion]`, `facts_cmd`/`comment_cmd`
+  adapters): a QA-done status set by someone other than the operator after the operator's
+  latest result comment, or later comments confirming QA, approve `by=judge`. Otherwise one
+  comment per result asks the reporter to move the ticket and `decision-request` exits 11
+  (`waiting=reporter`); the guard resumes that wait when the tracker shows the status.
+  Self transitions, self-reported tickets and missing result comments stay human.
+- On a to-do surface the decision watcher keeps one pinned `[factory] judge: on|off` setting
+  item (sdlc-kit 2.23.0 `pin`; older kits keep it unpinned); a reply switches the mode.
+- An unused approval no longer wakes the guard while its key waits on an environment with
+  needs; the passing preflight wakes it, so a blocked environment does not start an
+  orchestrator every tick.
+- Ended runs with no agent left to archive get `runs/TOKEN/archived` and are not listed on
+  every later wake.
+
 ## 0.8.0 - 2026-11-06
 
 - Accept caller-declared event completion when every comment has same-key handled

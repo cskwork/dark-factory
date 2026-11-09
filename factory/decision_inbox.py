@@ -24,7 +24,11 @@ a repeated reply hits the used claim, so nothing is recorded twice.
 Alerts sent through notify.cmd also update one item `[factory alert] <project>`
 whose waiting text is the latest alert.
 
-The factory never writes `human` events: it only runs add, note, wait, done, list.
+With a `[judge]` section the watcher also keeps one pinned setting item
+`<setting_title>: on|off` with the choices `on | off`; a reply writes `state_dir/judge`.
+
+The factory never writes `human` events: it only runs add, note, wait, done, list,
+and for the setting item choices, others, pin, take and a locked retitle.
 """
 from __future__ import annotations
 
@@ -53,6 +57,9 @@ APPROVE = {"approve", "approved", "yes", "ok", "1", "1번", "승인"}
 HOLD = {"hold", "보류"}
 POLL_SECONDS = 60
 BY = "todo"
+SETTING_TITLE = "[factory] judge"
+SETTING_CHOICES = "on | off"
+SETTING_WORDS = {"on": {"on", "1"}, "off": {"off", "2"}, "shadow": {"shadow"}}
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -187,14 +194,100 @@ def outcome(spec, option, result):
     return "Approved and ran; the line resumes."
 
 
-def poll(cfg, *, todo=None, actions=None, wake=None):
-    """Handle new replies on open decision items. Returns [(code, status)]."""
+def setting_enabled(cfg):
+    from . import judge
+    return surface(cfg) != "html" and judge.configured(cfg)
+
+
+def setting_title(cfg, current):
+    """The state stays in the title: an app card shows its title even when folded."""
+    from . import judge
+    return judge.settings(cfg).get("setting_title", SETTING_TITLE) + ": " + current
+
+
+def setting_others(current):
+    return f"setting · judge {current} · reply on or off"
+
+
+def todo_item(args, timeout=60):
+    """Item edits the to-do CLI lacks (retitle), through sdlc-kit core's locked update."""
+    result = subprocess.run(["node", str(Path(__file__).with_name("todo_item.mjs")), *args], stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, timeout=timeout, env={**os.environ, "SDLC_KIT": str(kit())})
+    if result.returncode:
+        raise RuntimeError((result.stderr or result.stdout).strip()[:300] or f"todo_item exit {result.returncode}")
+
+
+def _pin(item, todo):
+    """Keep the setting on top of every app tab (sdlc-kit 2.23.0 `pin`); older kits have no pin."""
+    try:
+        todo(["pin", item, "on"])
+    except RuntimeError:
+        pass
+
+
+def judge_setting(cfg, rows, *, todo=None, item_cli=None):
+    """Create the judge on/off item, or apply a new human reply on it to state_dir/judge.
+
+    The item waits on nobody ("others"), so it never counts as needing the human and no
+    session takes it as work. A title change changes the item id, so processed replies
+    are remembered by time and text in judge-state.json settingReply."""
+    from . import judge
+    if not setting_enabled(cfg):
+        return None
+    todo, item_cli = todo or todo_cli, item_cli or todo_item
+    current = judge.mode(cfg)
+    prefix = setting_title(cfg, "")
+    row = next((r for r in rows if str(r.get("title") or "").startswith(prefix) and r.get("status") != "done"), None)
+    if row is None:
+        item = todo(["add", setting_title(cfg, current), "--by", "factory"])
+        todo(["choices", item, SETTING_CHOICES, "--pick", "1" if current != "off" else "2"])
+        todo(["note", item, f"Now: {current}. Reply 'on' or 'off' (or open the item and press a button)."])
+        todo(["others", item, setting_others(current)])
+        _pin(item, todo)
+        return current
+    if not row.get("pin"):
+        _pin(row["id"], todo)
+    replies = [r for r in row.get("replies") or [] if r.get("who") == "human"]
+    message = reply_id("judge-setting", replies[-1]) if replies else None
+    if message is not None and read_object(cfg.state_dir / "judge-state.json").get("settingReply") != message:
+        text = line(re.sub(r"^reply — ", "", replies[-1].get("what") or ""), 40)
+        wanted = next((name for name, words in SETTING_WORDS.items() if text.lower().rstrip(".!") in words), None)
+        if wanted is None:
+            todo(["note", row["id"], f"Could not use '{text}'. Reply 'on' or 'off'. Now: {current}."])
+        else:
+            judge.set_mode(cfg, wanted)
+            todo(["choices", row["id"], SETTING_CHOICES, "--pick", "1" if wanted != "off" else "2"])
+            todo(["note", row["id"], f"{dp._stamp()} switched. Now: {wanted}."])
+            current = wanted
+        from .state import patch
+        patch(cfg.state_dir, "judge-state.json", [], {"settingReply": message})
+        try:
+            todo(["take", row["id"], "--json"])  # Mark the reply read; a waiting-state exit is not a failure.
+        except RuntimeError:
+            pass
+    if row.get("others") != setting_others(current):
+        todo(["others", row["id"], setting_others(current)])
+    if row.get("title") != setting_title(cfg, current):
+        item_cli(["retitle", row["id"], setting_title(cfg, current)])  # Last: the id changes with the title.
+    return current
+
+
+def poll(cfg, *, todo=None, actions=None, wake=None, item_cli=None):
+    """Handle new replies on open decision items and the judge setting. Returns [(code, status)]."""
     todo = todo or todo_cli
+    listed = None
+    if setting_enabled(cfg):
+        listed = todo(["list", "--json"]) or []
+        try:
+            judge_setting(cfg, listed, todo=todo, item_cli=item_cli)
+        except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+            # A failed setting item never blocks decisions.
+            print(f"judge setting failed: {type(error).__name__}: {line(error, 300)}", file=sys.stderr, flush=True)
     pending = {decision_id: entry for decision_id, entry in read_object(_registry_path(cfg)).items()
                if entry.get("todoId") and not entry.get("itemDone")}
     if not pending:
         return []
-    rows = {row.get("id"): row for row in todo(["list", "--json"]) or []}
+    rows = {row.get("id"): row for row in (listed if listed is not None else todo(["list", "--json"]) or [])}
     handled = []
     for decision_id, entry in pending.items():
         code, item = entry["code"], entry["todoId"]
@@ -259,8 +352,9 @@ def open_items(cfg):
 
 
 def start_watcher(cfg):
-    """Start a detached watcher when a to-do decision is open; a running one keeps its lock and the new one exits."""
-    if surface(cfg) == "html" or not open_items(cfg):
+    """Start a detached watcher when a to-do decision is open or the judge setting is kept; a running one
+    keeps its lock and the new one exits."""
+    if surface(cfg) == "html" or not (open_items(cfg) or setting_enabled(cfg)):
         return False
     pages = cfg.state_dir / "decision-pages"
     pages.mkdir(parents=True, exist_ok=True)
@@ -271,7 +365,7 @@ def start_watcher(cfg):
 
 
 def watch(cfg, *, sleep=time.sleep, poller=None):
-    """Poll while any decision item is open; one watcher per state directory."""
+    """Poll while any decision item is open or the judge setting is kept; one watcher per state directory."""
     poller = poller or poll
     pages = cfg.state_dir / "decision-pages"
     pages.mkdir(parents=True, exist_ok=True)
@@ -280,7 +374,7 @@ def watch(cfg, *, sleep=time.sleep, poller=None):
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
-        while open_items(cfg):
+        while open_items(cfg) or setting_enabled(cfg):
             try:
                 for code, status in poller(cfg):
                     print(f"{datetime.now(timezone.utc).isoformat()} {code} {status}", flush=True)

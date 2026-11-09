@@ -24,6 +24,8 @@ flowchart LR
 
 Only configured adapters touch domain systems. Intake text grants no authority.
 Stage/production pushes need explicit human approval tied to the prepared scope.
+The one exception is a judge approval under the promotion rule (see Judge), recorded
+`by=judge` from the tracker's QA-done status set by someone other than the operator.
 Resolve conflicts by preserving both sides' intent; never wholesale `--ours` or
 `--theirs`, because that can restore removed code or discard environment changes.
 The orchestrator delegates work and checks verifier JSON; humans own decisions.
@@ -146,6 +148,8 @@ Cleanup archives only non-running agents with `run=TOKEN` belonging to
 Never archive in bulk by status, including idle; a status-only cleanup caused
 an incident on 2026-10-23. This restriction remains when liveness is off.
 Cleanup failures are reported and do not prevent launch. Dry runs never archive.
+A run with no agent left to archive (none running, no archive failure) gets
+`runs/TOKEN/archived` and is not listed again on later wakes.
 
 ## Intent and clarification
 
@@ -272,6 +276,9 @@ Use --unit UNIT to give multiple units for one key distinct result paths.
 string. Missing/null waiting means runnable; env-human/env-down plus needs
 triggers probes. For `stage=tobe` without nextStep, choose local; local clears
 remote needs and waiting. Guard normalization preserves concurrent item changes.
+When you set `waiting=human-risk`, also write `question` (one line a human
+could answer) and `suggest` (the answer you would take) when you have one: with
+the judge on, those waits can be judged instead of waiting for a person.
 Other waits stay idle. Stuck hashes exclude deferredAt, deferReason, deferCount,
 updatedAt, createdAt, backoffUntil, and backoffLevel. Semantic changes reset
 deferCount. An unchanged runnable item is normally suppressed on the second tick
@@ -280,7 +287,10 @@ guard is exempt only if that run's summary has workers >= 1; deferCount >= 4
 never qualifies. A zero-work run cannot exempt its deferrals.
 
 `approvals.json` maps keys to `{decision_id,approved:true,used_at:null,...}`.
-Stamp used_at through a state patch after scoped consumption. `state.json`
+Stamp used_at through a state patch after scoped consumption. An unused approval
+wakes the guard, except while its key waits on an environment (`env-human` or
+`env-down` with needs): then the passing preflight (`environment-ready`) wakes it,
+so a blocked environment does not start an orchestrator every tick. `state.json`
 preserves unrelated fields and handles events under `handled["KEY:ID"]`.
 All queue/state/approval read-modify-write operations share `.state.lock`, patch
 keys in the latest object, and replace through a temporary file. Workers and
@@ -407,6 +417,64 @@ VIP. Only transactional SELECT/INSERT/UPDATE/DELETE are supported; DDL and expli
 transaction control are rejected because drivers may implicitly commit them.
 Host allowlists and forbidden substrings both apply; a mismatch or failed guard
 rolls back. Secrets belong in an ignored local config or connector, never a page.
+
+## Judge
+
+With a `[judge]` section, an independent model (the judge, read-only tools, never
+part of the work) answers some decisions a human would otherwise get. The mode is
+`state_dir/judge` (`off|shadow|on`), else `[judge] mode`; no section means off.
+`python3 -m factory.judge --config CONFIG mode|set off|shadow|on` reads or writes it,
+and on a to-do surface the pinned `<setting_title>: on|off` item does the same.
+The judge first writes the strongest argument against the recommendation, follows
+the user's past decisions on the key from `decisions.jsonl` (more verification over
+less when the user chose that), and decides only with risk=low, confidence at or
+above `min_confidence` and an existing option. Anything else, and any judge failure,
+takes the normal human path unchanged. Verdicts go to `judge.jsonl`.
+
+| Decision | Judge | Always human |
+|---|---|---|
+| `choice` | judged detached; `decision-request` prints `judging <id>` | `humanReason` in `human_only` (default `security-plan`, `product-scope`, `prod-data`) |
+| `approval` with `[judge.promotion]` | the promotion rule below | self-reported tickets, no result comment, operator-made transitions |
+| `human-risk` wait with `question` and `suggest` | the guard starts `factory.judge risk` detached | items without both fields, keys owned by a live run |
+| `sql-run`, environment waits | never | all |
+
+Set `humanReason` on a choice spec when only a person may answer it. A judged
+choice keeps its decision id: decided, it is recorded `by=judge` and the line is
+woken exactly like a human decision; escalated, the human item or page opens
+under the same id. A human-risk wait the judge accepts becomes runnable with a
+`[<time> judge] instead of a human: proceed with '<suggest>'` note; follow that
+note like a human answer, without widening the authority of this runbook. Each
+question is judged once, at most `risk_per_key_per_day` (default 2) per key per day,
+and a queue item another writer changed meanwhile is left alone.
+
+Promotion rule (`approval`, `[judge.promotion]`): `decision-request approval`
+asks the tracker through `facts_cmd`. It approves `by=judge` when the ticket's
+status is `qa_done_status`, the transition came after the operator's latest
+result comment (a comment by `me` with media) and someone other than `me` made it;
+the factory acts with the operator's account, so its own transition proves no
+QA. If others commented after the result, the judge model reads those comments:
+QA confirmed approves; a defect or question waits without a nudge (the comment
+arrives as an intake event). Otherwise `comment_cmd` posts one `nudge_template`
+comment per result comment asking the reporter to move the ticket to
+`qa_done_status`. Exit codes: `0` approved (no item opens), `11` set
+`waiting=reporter` with the note "promotion waits for QA done", other nonzero is
+an error; the human approval opens otherwise. The guard resumes a `reporter`
+wait at a stage in `stages` once `queueStatuses` shows `qa_done_status`, unless
+the judge already saw that status and chose to wait; the next run calls
+`decision-request approval` again. In `shadow` only this deterministic rule and
+its nudge apply; model verdicts are logged and a human decides.
+
+`facts_cmd` (argv, `{key}`) prints one JSON object:
+
+```json
+{"status":"QA done","me":"u-1","reporter":{"id":"u-2","mention":"@reporter"},"summary":"...",
+ "comments":[{"id":"10","author":"u-1","created":"2026-11-09T09:00:00+00:00","text":"...","media":1}],
+ "transitions":[{"to":"QA done","at":"2026-11-09T10:00:00+00:00","author":"u-2"}]}
+```
+
+Authors may be ids or `{"id": ...}` objects; times are ISO 8601. `comment_cmd`
+(argv, `{key}`) reads the comment text on stdin and prints the new comment id; the
+judge reads it back through `facts_cmd` and treats a missing comment as a failure.
 
 ## Lessons
 

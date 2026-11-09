@@ -395,7 +395,9 @@ def launcher(cfg, role, token=None, key=None, attempt=None):
 
 
 def archive_finished(cfg):
-    """Archive only non-running agents of locally ended run tokens."""
+    """Archive only non-running agents of locally ended run tokens.
+
+    A run with no agent left to archive gets runs/TOKEN/archived and is not listed again."""
     settings = cfg.get("launcher", {})
     if settings.get("archive_cmd") is None:
         return 0, 0
@@ -406,16 +408,19 @@ def archive_finished(cfg):
     archived = failed = 0
     for marker in sorted((cfg.state_dir / "runs").glob("*/ended")):
         token = marker.parent.name
-        if not valid_token(token):
+        if not valid_token(token) or (marker.parent / "archived").exists():
             continue
         try:
             rows = agents(cfg, token, archived=False, strict=False)
         except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
             failed += 1
             continue
-        seen = set()
+        seen, settled = set(), True
         for row in rows:
-            if row["status"] == "running" or row["id"] in seen:
+            if row["status"] == "running":
+                settled = False
+                continue
+            if row["id"] in seen:
                 continue
             seen.add(row["id"])
             try:
@@ -423,6 +428,9 @@ def archive_finished(cfg):
                 archived += 1
             except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
                 failed += 1
+                settled = False
+        if settled:
+            mark_run(cfg, token, "archived")
     return archived, failed
 
 
