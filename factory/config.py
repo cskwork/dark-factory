@@ -16,6 +16,11 @@ def strings(value):
     return isinstance(value, list) and all(isinstance(item, str) and item.strip() for item in value)
 
 
+def argv(value):
+    """A nonempty argv list or command string."""
+    return bool(value) and (strings(value) or isinstance(value, str) and bool(value.strip()))
+
+
 class Config:
     def __init__(self, data, path):
         self.data = data
@@ -72,6 +77,7 @@ class Config:
             value = lessons.get(name, default)
             if type(value) is not int or value <= 0:
                 raise ValueError("invalid lessons." + name)
+        self._validate_judge(self.get("judge", {}))
         worker = self.get("worker", {})
         if not isinstance(worker, dict):
             raise ValueError("invalid worker settings")
@@ -80,6 +86,37 @@ class Config:
                 not isinstance(name, str) or not name or "=" in name or "\0" in name
                 or not isinstance(value, str) or "\0" in value for name, value in env.items())):
             raise ValueError("invalid worker.env")
+
+    @staticmethod
+    def _validate_judge(judge):
+        """Optional [judge]; a missing section keeps the judge off."""
+        if not isinstance(judge, dict):
+            raise ValueError("invalid judge settings")
+        if not judge:
+            return
+        if not argv(judge.get("command")):
+            raise ValueError("invalid judge.command: an argv list or string is required")
+        confidence = judge.get("min_confidence", 0.8)
+        if (judge.get("mode", "off") not in ("off", "shadow", "on")
+                or type(confidence) not in (int, float) or not 0 <= confidence <= 1
+                or not strings(judge.get("human_only", []))
+                or not strings([judge.get("setting_title", "[factory] judge")])):
+            raise ValueError("invalid judge settings")
+        for name, default in (("risk_per_key_per_day", 2), ("timeout_seconds", 900)):
+            value = judge.get(name, default)
+            if type(value) is not int or value <= 0:
+                raise ValueError("invalid judge." + name)
+        rule = judge.get("promotion")
+        if rule is None:
+            return
+        if (not isinstance(rule, dict) or not strings([rule.get("qa_done_status")])
+                or not strings(rule.get("stages", [])) or not strings([rule.get("nudge_template", "{reporter}")])
+                or not argv(rule.get("facts_cmd")) or not argv(rule.get("comment_cmd"))):
+            raise ValueError("invalid judge.promotion")
+        try:
+            rule.get("nudge_template", "{reporter}").format_map({"reporter": "", "status": ""})
+        except (KeyError, ValueError, IndexError) as error:
+            raise ValueError("invalid judge.promotion.nudge_template: use {reporter} and {status}") from error
 
     @staticmethod
     def resolve(value, parent):

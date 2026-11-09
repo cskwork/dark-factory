@@ -343,6 +343,8 @@ def _decide(cfg, classifier=None, force_refresh=False):
             if "*" not in blocked and key not in blocked and not backoff_active(item, now):
                 normalize(item)
         removals, to_reporter = reconcile_queue(cfg, queue, scan.get("queueStatuses", {}), blocked)
+        from . import judge
+        to_promotion = judge.resume_on_status(cfg, queue, scan.get("queueStatuses", {}), blocked)
         state = read_object(cfg.state_dir / "guard-state.json")
         previous = state.get("runnable", {})
         if not isinstance(previous, dict):
@@ -420,7 +422,7 @@ def _decide(cfg, classifier=None, force_refresh=False):
                 else:
                     reasons.append(reason)
         changes = {key: (originals[key], item) for key, item in queue.items() if item != originals[key]}
-        reconciled = {"removed": {}, "reporter": {}}
+        reconciled = {"removed": {}, "reporter": {}, "promotion": {}}
         if changes or removals:
             def update_queue(latest):
                 for key, why in removals.items():
@@ -438,11 +440,22 @@ def _decide(cfg, classifier=None, force_refresh=False):
                             current[field] = value
                     if key in to_reporter and current.get("waiting") == "reporter":
                         reconciled["reporter"][key] = to_reporter[key]
+                    if key in to_promotion and current.get("waiting") is None:
+                        reconciled["promotion"][key] = to_promotion[key]
             transaction(cfg.state_dir, "queue.json", update_queue)
-        if reconciled["removed"] or reconciled["reporter"]:
+        if not reconciled["promotion"]:
+            del reconciled["promotion"]
+        if reconciled["removed"] or reconciled["reporter"] or reconciled.get("promotion"):
             result["queueReconcile"] = reconciled
             # Append-only evidence: a removed key can be queued again from this record.
             append_json(cfg.state_dir / "runs.jsonl", {"at": now, "action": "queue-reconcile", **reconciled})
+        if judge.risk_candidates(cfg, queue, blocked):
+            # Judge human-risk waits that carry a question and a suggestion; detached, it takes minutes.
+            try:
+                judge.launch_risk(cfg)
+                result["judge"] = "risk-launched"
+            except OSError as error:
+                record_error(result["internalErrors"], error)
         state["runnable"] = runnable
         result["waitingHuman"] = [{"action": action, "keys": sorted(keys)} for action, keys in sorted(groups.items())]
         today = date.today().isoformat()
@@ -476,6 +489,10 @@ def _decide(cfg, classifier=None, force_refresh=False):
             if not isinstance(approval, dict):
                 raise ValueError("invalid approval")
             if "*" in blocked or key in blocked or backoff_active(queue.get(key, {}), now):
+                continue
+            item = queue.get(key, {})
+            if item.get("waiting") in ("env-human", "env-down") and item.get("needs"):
+                # The environment blocks this key: its preflight (environment-ready) wakes the line, not the approval.
                 continue
             if approval.get("approved") is True and not approval.get("used_at"):
                 reasons.append("approval-unused:" + key)

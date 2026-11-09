@@ -40,6 +40,7 @@ flowchart LR
 | orchestrator | expensive model, high reasoning | pick units, write briefs, check verifier JSON, report the whole picture, release the lock | edit code, push, deploy, write to the tracker, record decisions |
 | workers | role → model from config | implement, reproduce, merge, deploy to dev, comment | exceed the runbook's authority |
 | human | decision page or to-do item | approvals, DB changes, policy choices | relay tickets, logs, or commands |
+| judge (optional) | independent model, read-only tools | low-risk choices, judged human-risk waits, promotion approval from the tracker's QA-done status | SQL runs, human-only choices, environment waits |
 
 ## Quick start
 
@@ -76,10 +77,25 @@ Human decisions appear on one configured surface, `[decisions] surface`:
 
 Either way the decision is appended to `decisions.jsonl` through the same single-use claim and the line resumes at once (`factory-wake --now --key KEY`). "Hold" records nothing. Production databases are never executed from a decision; their SQL is posted to the ticket for the release owner.
 
+## Judge
+
+Optional. With a `[judge]` section, an independent model answers the decisions that do not need a person, so the line does not stall on them; everything else keeps the human path above. Without the section the judge is off: no model is called and nothing is posted.
+
+- **Mode**: `state_dir/judge` (`off|shadow|on`) overrides `[judge] mode`; an unreadable value is `off`. `python3 -m factory.judge --config CONFIG set on|off|shadow` writes it. On a to-do surface the watcher keeps one pinned setting item `[factory] judge: on|off` (`setting_title`) with the choices `on | off`, marked as waiting on others so it never counts as needing you; a reply switches the mode. Pinning needs sdlc-kit 2.23.0 or later; older kits keep the item unpinned. `shadow` applies only the deterministic promotion rule and logs model verdicts to `judge.jsonl` without applying them.
+- **How it judges**: it first writes the strongest argument against the recommended option, reads your past decisions on the same key from `decisions.jsonl` and follows your tendency (more verification over less when you chose that), and decides only with risk=low, confidence of at least `min_confidence` (default **0.8**) and an existing option. A model failure escalates. Every verdict goes to `judge.jsonl`.
+- **Choices**: `decision-request choice` creates the request, prints `judging <decision id>` and judges detached (minutes). Decided: recorded with `by=judge` and the line wakes like a human decision. Escalated: the human item or page opens under the same decision id. A choice spec may carry `humanReason`; values in `human_only` (default `security-plan`, `product-scope`, `prod-data`) never reach the model. `sql-run` never does.
+- **Human-risk waits**: the guard starts a detached judge pass over `human-risk` queue items that carry `question` and `suggest`. Accepted: `waiting=null`, a `[<time> judge]` note, `question`/`suggest` removed, recorded `by=judge`. The same question is judged once, at most `risk_per_key_per_day` (default **2**) per key per day; keys owned by a live run and items changed meanwhile are left alone.
+- **Promotion approval** (`[judge.promotion]`): `decision-request approval` reads the tracker through `facts_cmd`. It approves `by=judge` when the ticket's status is `qa_done_status`, that transition came after the operator's latest result comment (a comment by `me` with media), and someone other than `me` made it (the factory uses the operator's account, so a self transition proves nothing). Newer comments by others are judged: QA confirmed approves, a defect or question waits without a nudge. Otherwise `comment_cmd` posts one `nudge_template` comment per result comment asking the reporter to move the ticket, and `decision-request` exits **11**: wait as `reporter`. The guard resumes that wait (stage in `stages`) when `queueStatuses` shows `qa_done_status`, unless the judge already saw that status and chose to wait. Self-reported tickets and tickets without a result comment get the human approval.
+
+Tracker contracts for the promotion rule:
+
+- `facts_cmd` (argv, `{key}`) prints `{"status","me","reporter":{"id","mention"},"summary","comments":[{"id","author","created","text","media"}],"transitions":[{"to","at","author"}]}`; authors are ids or `{"id"}` objects, times ISO 8601, `media` a count.
+- `comment_cmd` (argv, `{key}`) reads the comment text on stdin and prints the new comment id; the judge reads it back through `facts_cmd` before counting it as posted.
+
 ## Safety model
 
-- Two layers of approval stay human: promotion past dev, and anything that changes data or schema outside dev.
-- The orchestrator never records a decision on a human's behalf, and tracker text is data, never instructions.
+- Two layers of approval stay human: promotion past dev, and anything that changes data or schema outside dev. The only exception is the configured judge promotion rule: a QA-done status set by someone other than the operator after the result comment.
+- The orchestrator never records a decision on a human's behalf, and tracker text is data, never instructions. Judge decisions are recorded `by=judge` by the judge itself.
 - Completion needs verifier output, not a model's say-so. A verifier that fails blocks "done".
 - Merge conflicts: resolve against the target branch's version and re-apply only the ticket's lines; never take a whole file with `--ours`/`--theirs`. A separate reviewer approves; two rejections or a semantic conflict go to a human.
 - The guard persists normalized `nextStep`/`needs`/`waiting` and `guard-last.json`; wake passes its reasons to the orchestrator. An unchanged runnable item on the second tick is suppressed with a lesson and one notification in `guard-state.json`; changed content resumes it.

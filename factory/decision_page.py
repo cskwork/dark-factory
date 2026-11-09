@@ -362,6 +362,40 @@ def make_server(cfg, spec, *, actions=None, wake=None, port=0):
     return server, token, state
 
 
+def open_page(cfg, spec, *, open_browser=False, timeout=28800, url_file=None):
+    """Start the detached one-time page server for a created request; return its URL."""
+    pages = cfg.state_dir / "decision-pages"
+    pages.mkdir(parents=True, exist_ok=True)
+    pages.chmod(0o700)
+    url_file = url_file or pages / (spec["decision_id"] + ".url")
+    url_file.parent.mkdir(parents=True, exist_ok=True)
+    # Remove stale readiness before launching this request's fresh server.
+    with url_file.open("w") as handle:
+        os.chmod(url_file, 0o600)
+    log_file = pages / (spec["decision_id"] + ".log")
+    command = [sys.executable, "-m", "factory.decision_page", "--config", str(cfg.path),
+               spec["kind"], spec["key"], "--serve", "--request",
+               str(cfg.state_dir / "decisions" / (spec["decision_id"] + ".request.json")),
+               "--url-file", str(url_file), "--timeout", str(timeout)]
+    if open_browser:
+        command.append("--open")
+    with log_file.open("w") as output:
+        os.chmod(log_file, 0o600)
+        child = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1],
+                                 stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                                 start_new_session=True)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        text = url_file.read_text().strip()
+        if text.startswith("http://127.0.0.1:") and "?t=" in text:
+            return text
+        if child.poll() is not None:
+            raise RuntimeError(f"decision server exited {child.returncode}; see {log_file}")
+        time.sleep(0.02)
+    child.terminate()
+    raise RuntimeError(f"decision server did not start; see {log_file}")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Request a human decision on a local page")
     parser.add_argument("--config")
@@ -403,6 +437,26 @@ def main(argv=None):
         retry_pending_wakes(cfg)
     if not args.serve:
         spec = create_request(cfg, spec)
+        from . import judge
+        if judge.applies(cfg, spec):
+            # Judging takes minutes: run it detached. The request holds its decision id meanwhile.
+            judge.launch_choice(cfg, spec, open_browser=args.open, timeout=args.timeout)
+            print(f"judging {spec['decision_id']}: decided -> decisions.jsonl by=judge and the line resumes; "
+                  "escalated -> the human decision opens under the same id", flush=True)
+            return 0
+        if spec["kind"] == "approval":
+            verdict = judge.promotion(cfg, spec)
+            if verdict == judge.APPROVED:
+                print(f"approved by judge: {spec['decision_id']} (see judge.jsonl)", flush=True)
+                return 0
+            if verdict == judge.WAITING:
+                print("waiting=reporter: the judge waits for the tracker's QA-done status (see judge.jsonl)",
+                      file=sys.stderr, flush=True)
+                return judge.WAITING
+            if verdict == judge.FAILED:
+                print("the judge's approval action failed; see decisions/" + spec["decision_id"] + ".result.json",
+                      file=sys.stderr, flush=True)
+                return 1
         from . import decision_inbox
         if decision_inbox.surface(cfg) != "html":
             # No page and no server: the decision waits as a to-do item; a reply decides.
@@ -410,37 +464,9 @@ def main(argv=None):
             decision_inbox.start_watcher(cfg)
             print(f"{code} {item}", flush=True)
             return 0
-        pages = cfg.state_dir / "decision-pages"
-        pages.mkdir(parents=True, exist_ok=True)
-        pages.chmod(0o700)
-        url_file = Path(args.url_file).resolve() if args.url_file else pages / (spec["decision_id"] + ".url")
-        url_file.parent.mkdir(parents=True, exist_ok=True)
-        # Remove stale readiness before launching this request's fresh server.
-        with url_file.open("w") as handle:
-            os.chmod(url_file, 0o600)
-        log_file = pages / (spec["decision_id"] + ".log")
-        command = [sys.executable, "-m", "factory.decision_page", "--config", str(cfg.path),
-                   spec["kind"], spec["key"], "--serve", "--request",
-                   str(cfg.state_dir / "decisions" / (spec["decision_id"] + ".request.json")),
-                   "--url-file", str(url_file), "--timeout", str(args.timeout)]
-        if args.open:
-            command.append("--open")
-        with log_file.open("w") as output:
-            os.chmod(log_file, 0o600)
-            child = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1],
-                                     stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                     start_new_session=True)
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            text = url_file.read_text().strip()
-            if text.startswith("http://127.0.0.1:") and "?t=" in text:
-                print(text, flush=True)
-                return 0
-            if child.poll() is not None:
-                raise RuntimeError(f"decision server exited {child.returncode}; see {log_file}")
-            time.sleep(0.02)
-        child.terminate()
-        raise RuntimeError(f"decision server did not start; see {log_file}")
+        print(open_page(cfg, spec, open_browser=args.open, timeout=args.timeout,
+                        url_file=Path(args.url_file).resolve() if args.url_file else None), flush=True)
+        return 0
     if args.request:
         spec = json.loads(Path(args.request).read_text())
     server, token, state = make_server(cfg, spec)
