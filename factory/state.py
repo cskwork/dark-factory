@@ -92,12 +92,21 @@ def transaction(directory, filename, callback):
         return data
 
 
+# A human-risk wait either asks (question, suggest: the judge may answer it) or names a step
+# only a person can do (action, runSheet: shown as a to-do, never judged). One form replaces the other.
+HUMAN_ASK = ("question", "suggest")
+HUMAN_ACTION = ("action", "runSheet")
+
+
 def patch(directory, filename, path, values, delete=()):
     """Merge named fields without replacing sibling items or nested objects."""
     if (not isinstance(path, list) or not all(isinstance(key, str) for key in path)
             or not isinstance(values, dict) or not isinstance(delete, (list, tuple))
             or not all(isinstance(key, str) for key in delete)):
         raise ValueError("path/delete must contain strings and values must be an object")
+    queue = _target(directory, filename) == _target(directory, "queue.json")
+    if queue and "action" in values and set(HUMAN_ASK) & set(values):
+        raise ValueError("action (a step only a person can do) excludes question and suggest")
 
     def apply(data):
         node = data
@@ -106,6 +115,9 @@ def patch(directory, filename, path, values, delete=()):
             if not isinstance(node, dict):
                 raise ValueError("patch path must contain objects")
         node.update(values)
+        if queue:
+            for name in (HUMAN_ASK if "action" in values else HUMAN_ACTION if set(HUMAN_ASK) & set(values) else ()):
+                node.pop(name, None)
         for key in delete:
             node.pop(key, None)
 
@@ -161,6 +173,9 @@ def main(argv=None):
     change.add_argument("--path", type=json.loads, default=[])
     change.add_argument("--json", type=json.loads, required=True, dest="values")
     change.add_argument("--delete", type=json.loads, default=[])
+    change.add_argument("--action", help="human-risk: one line naming a step only a person can do; "
+                                          "excludes question and suggest")
+    change.add_argument("--run-sheet", dest="runSheet", help="with --action: the path of the steps the person follows")
     append = commands.add_parser("append-pending", parents=[common])
     content = append.add_mutually_exclusive_group(required=True)
     content.add_argument("--line")
@@ -169,11 +184,21 @@ def main(argv=None):
     consume.add_argument("--lines", type=json.loads, required=True)
     lesson = commands.add_parser("lesson", parents=[common])
     lesson.add_argument("--json", type=json.loads, required=True, dest="row")
+    fixed = commands.add_parser("lesson-fixed", parents=[common],
+                                help="record the commit that fixed a fix-now lesson and close its to-do item")
+    fixed.add_argument("signature", help="lesson signature (at least 8 leading hex characters)")
+    fixed.add_argument("--commit", required=True)
     args = parser.parse_args(argv)
     try:
         cfg = load_config(getattr(args, "config", None))
         directory = cfg.state_dir
         if args.command == "patch":
+            if not isinstance(args.values, dict):
+                raise ValueError("--json must be an object")
+            if args.runSheet is not None and args.action is None:
+                raise ValueError("--run-sheet needs --action")
+            args.values.update({name: getattr(args, name) for name in HUMAN_ACTION
+                                if getattr(args, name) is not None})
             print(json.dumps(patch(directory, args.filename, args.path, args.values, args.delete)))
         elif args.command == "append-pending":
             if args.row is not None and not isinstance(args.row, dict):
@@ -182,6 +207,9 @@ def main(argv=None):
         elif args.command == "lesson":
             from .lessons import append_lesson
             print(json.dumps(append_lesson(cfg, args.row)))
+        elif args.command == "lesson-fixed":
+            from .lessons import mark_fixed
+            print(json.dumps(mark_fixed(cfg, args.signature, args.commit)))
         else:
             print(consume_pending(directory, args.lines))
         return 0

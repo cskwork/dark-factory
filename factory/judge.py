@@ -409,15 +409,16 @@ def risk_hash(item):
 
 
 def risk_candidates(cfg, queue, blocked):
-    """human-risk items with question and suggest, not owned by a run, unjudged and under the daily cap."""
+    """human-risk items with question and suggest and no action, not owned by a run, unjudged and under the daily cap."""
     if mode(cfg) == "off" or "*" in blocked:
         return []
     seen = read_object(cfg.state_dir / "judge-state.json").get("riskSeen", {})
     cap, today = settings(cfg).get("risk_per_key_per_day", 2), date.today().isoformat()
     keys = []
     for key, item in sorted(queue.items()):
+        # A step only a person can do (action) is never judged: the judge cannot observe it done.
         if (not isinstance(item, dict) or item.get("waiting") != "human-risk" or key in blocked
-                or not item.get("question") or not item.get("suggest")):
+                or item.get("action") or not item.get("question") or not item.get("suggest")):
             continue
         entry = seen.get(key, {})
         count = entry.get("count", 0) if entry.get("day") == today else 0

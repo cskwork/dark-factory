@@ -392,6 +392,12 @@ def _decide(cfg, classifier=None, force_refresh=False):
                                    if row.get("status") in ("HUMAN", "DOWN")), {})
                     action = failed.get("human_action") or failed.get("reason") or "environment-unavailable"
                     groups.setdefault(action, []).append(key)
+            elif waiting == "human-risk" and isinstance(item.get("action"), str) and item["action"].strip():
+                # A step only a person can do: shown as the action to take, with no suggested answer.
+                action = "Human action: " + " ".join(item["action"].split())
+                if isinstance(item.get("runSheet"), str) and item["runSheet"].strip():
+                    action += " · run sheet: " + " ".join(item["runSheet"].split())
+                groups.setdefault(action, []).append(key)
             if reason:
                 digest = item_digest(item)
                 old = previous.get(key, {})

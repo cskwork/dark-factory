@@ -220,8 +220,11 @@ def _busy(cfg, current, now):
         return True
     mark_run(cfg, current["token"], "lost")
     append_json(cfg.state_dir / "runs.jsonl", {"at": now, "action": "lost-run", "token": current["token"]})
+    # No orchestratorId: the wake died after taking the lock, before launching; with one: the
+    # launched orchestrator ended without releasing.
     append_lesson(cfg, {"at": now, "kind": "infra_fail", "what": "lost-run: " + current["token"],
-                        "evidence": str(run_path(cfg, current["token"]))})
+                        "evidence": str(run_path(cfg, current["token"])),
+                        "orchestratorId": current.get("orchestratorId"), "trigger": current.get("trigger")})
     _clear_lock(cfg)
     return False
 
@@ -330,7 +333,7 @@ def guard(cfg, manual=False, release=False, token=None, force=False, force_refre
             write_json(cfg.state_dir / "guard-last.json", decision)
         # Keep this invocation's reasons even if another guard subsequently skips.
         run = {"started_at": now, "token": uuid.uuid4().hex, "mode": mode, "reasons": decision["reasons"],
-               "liveness": "on" if liveness_enabled(cfg) else "off"}
+               "trigger": "manual" if manual else "tick", "liveness": "on" if liveness_enabled(cfg) else "off"}
         try:
             write_json(running, run)
             (cfg.state_dir / "running").write_text(str(now) + "\n")

@@ -248,6 +248,14 @@ def decide(cfg, spec, option, *, actions=None, wake=None, by="button", note=None
         result = {"ok": False, "error": _error(error)}
     result["status"] = "done" if result["ok"] else "failed"
     _audit(cfg, {**base, "event": "action", **result})
+    if spec.get("lessonSignature") and option == "fix-now":
+        # A fix-now answer becomes a tracked fix; a failure here is retried by the next recurrence.
+        try:
+            from .lessons import track_fixes
+            track_fixes(cfg)
+        except Exception as error:
+            result["fix_track_error"] = _error(error)
+            _audit(cfg, {**base, "event": "fix-track", "ok": False, "error": _error(error)})
     _write(cfg.state_dir / "decisions" / (spec["decision_id"] + ".result.json"), result)
     # Wake even when the action failed so orchestration can report the failure.
     with _lock(pending.with_suffix(".lock")):

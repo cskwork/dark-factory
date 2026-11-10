@@ -107,13 +107,13 @@ Tracker contracts for the promotion rule:
 
 Worker failures, verifier failures, review rejections, new human waits, and reviewers' non-blocking notes use the shared `factory.lessons` writer through `python3 -m factory.state --config CONFIG lesson --json '{"kind":"infra_fail","what":"Verifier unavailable","key":"PROJ-123"}'`. It appends to `lessons.jsonl` and groups kind + normalized what, ignoring changing ticket keys, SHAs, numbers, timestamps and comment ids.
 
-At **3 occurrences in 14 days**, it opens one decision with **fix-now (recommended)**, accept and ignore. Open decisions are reused; an answer prevents another request for **7 days**. Configure positive integer thresholds in `[lessons]`.
+At **3 occurrences in 14 days**, it opens one decision with **fix-now (recommended)**, accept and ignore. Open decisions are reused; an answer prevents another request for **7 days**. Configure positive integer thresholds in `[lessons]`. A **fix-now** answer becomes one tracked fix per signature (a `[factory fix]` to-do item on a to-do surface); recurrences while it is open add at most one note per day. `python3 -m factory.state --config CONFIG lesson-fixed <signature> --commit <sha>` closes it, and a recurrence after closing opens a "the fix did not hold" decision at once.
 
 A weekly retro (template in `templates/RETRO.template.md`) groups repeats, prefers a new verifier over a new rule, and prepares a `retro/YYYYMMDD` branch with tests. Each user decision also opens through `bin/decision-request` with a recommended option; the report cites existing recurring-lesson decisions instead of duplicating them. Humans review and merge; publication requires authorization.
 
 ## State and drain operations
 
-Use `python3 -m factory.state --config CONFIG patch queue.json --path '["PROJ-123"]' --json '{"stage":"build","waiting":null}'` for key-level updates. The same command updates `state.json` and `approvals.json`, preserving other keys under `.state.lock`. Do not read and rewrite entire shared objects in a worker. JSONL evidence is append-only.
+Use `python3 -m factory.state --config CONFIG patch queue.json --path '["PROJ-123"]' --json '{"stage":"build","waiting":null}'` for key-level updates. A `human-risk` wait for a step only a person can do takes `--action '<line>' [--run-sheet <path>]` instead of `question`/`suggest`: the guard notifies the action with no suggested answer and the judge skips it. The same command updates `state.json` and `approvals.json`, preserving other keys under `.state.lock`. Do not read and rewrite entire shared objects in a worker. JSONL evidence is append-only.
 
 The orchestrator uses `python3 -m factory.drain --config CONFIG --token TOKEN` for budget, ranking, summaries, deferrals, and per-item rate-limit backoff. The [runbook](templates/RUNBOOK.template.md) specifies the full loop and recovery procedure. Deferred items avoid the stuck backstop only when the previous run did useful worker work; **4 consecutive deferrals** still count as stuck. Rate limits back off only that item for **30, 60, then 120 minutes**, capped at **120 minutes**. New events and unblocked pending focus still wake the line.
 

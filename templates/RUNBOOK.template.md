@@ -240,8 +240,10 @@ do not post a result; record why and wait for the environment or a human.
 
 ## Local state
 
-`running.json` holds started_at/token/mode and liveness bookkeeping, including
-orchestratorId, noLiveSince, query failures, and the one-time alert marker.
+`running.json` holds started_at/token/mode/trigger (`tick` or `manual`) and liveness
+bookkeeping, including orchestratorId, noLiveSince, query failures, and the one-time
+alert marker. A reclaimed lock's `lost-run` lesson records `orchestratorId` and
+`trigger`: no orchestratorId means the wake died after taking the lock, before launching.
 Updates are atomic. Idle runs take no running lock. Only tick checks idle;
 the first run each local day is morning until `done-today` contains YYYY-MM-DD.
 `last-wake.json` bounds duplicate ticks.
@@ -279,6 +281,12 @@ remote needs and waiting. Guard normalization preserves concurrent item changes.
 When you set `waiting=human-risk`, also write `question` (one line a human
 could answer) and `suggest` (the answer you would take) when you have one: with
 the judge on, those waits can be judged instead of waiting for a person.
+When the wait is a step only a person can do (create a secret, an account or a
+permission), do not ask: `patch queue.json --path '["KEY"]' --json
+'{"waiting":"human-risk"}' --action '<one line>' [--run-sheet <path>]`. `action`
+excludes `question` and `suggest` (writing one form removes the other); the guard
+notifies `Human action: <action>` with no suggested answer, and the judge never
+judges it.
 Other waits stay idle. Stuck hashes exclude deferredAt, deferReason, deferCount,
 updatedAt, createdAt, backoffUntil, and backoffLevel. Semantic changes reset
 deferCount. An unchanged runnable item is normally suppressed on the second tick
@@ -487,6 +495,13 @@ ids. `[lessons]` defaults to `escalate_count=3`, `window_days=14`,
 `cooldown_days=7`, all positive integers. Three repeats in fourteen days open
 one existing decision request: fix-now (recommended), accept or ignore. An open
 request suppresses duplicates; an answer suppresses requests for seven days.
+A `fix-now` answer becomes one tracked fix per signature (`lesson-decisions/fixes.json`)
+and, on a to-do surface, one `[factory fix] <failure>` item. While it is open a
+recurrence adds at most one note per day instead of a decision. After the fixing
+commit lands, run `python3 -m factory.state --config CONFIG lesson-fixed
+<signature, 8+ hex> --commit <sha>` (or a person closes the item); the next
+recurrence then opens a "the fix did not hold" decision at once, without the
+threshold or the cooldown.
 Run the retro weekly to propose a reviewed improvement branch and open each
 user decision with a recommended option (see the retro template). Humans merge harness changes.
 All shipped tests are offline: `python3 -m unittest discover -s tests -v`.
@@ -597,7 +612,7 @@ then patches that stage. Failure is exit 4; preserve all passing artifacts and
 keep the current stage. Set the item's waiting to the gate's `queueWaiting`: a worker that stopped
 on an environment wait (env-human/env-down, e.g. wrong VPN) keeps it, with the
 blocked step's nextStep/needs, so the guard probes and asks for VPN; anything
-else is human-risk, which the guard never probes or notifies. No low-level state machine is added; callers must use
+else is human-risk, which the guard never probes (it notifies only a human-risk `action`). No low-level state machine is added; callers must use
 this gate before their declared transition. The wrapper and drain gate verify
 saved caller-declared evidence; they do not run or authenticate remote verifiers.
 

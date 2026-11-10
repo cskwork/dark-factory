@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.10.0 - 2026-11-10
+
+- A `fix-now` answer to a recurring-lesson decision is no longer forgotten: it becomes one
+  tracked fix per signature (`lesson-decisions/fixes.json`) and, on a to-do surface, one
+  `[factory fix] <failure>` item. While it is open, a recurrence adds at most one note per
+  day instead of another decision. `python3 -m factory.state lesson-fixed <signature>
+  --commit <sha>` (or a person closing the item) closes it; a recurrence after closing opens
+  a "the fix did not hold" decision at once, without waiting for the threshold or cooldown.
+  Every surface records the answer through `decide`, so page, to-do and judge answers all
+  track; a tracking failure is audited (`fix-track`) and retried by the next recurrence.
+- A `human-risk` wait for a step only a person can do is recorded as an action:
+  `factory.state patch queue.json ... --action '<line>' [--run-sheet <path>]`. `action`
+  excludes `question` and `suggest` (writing one form removes the other). The guard notifies
+  `Human action: <action>` with no suggested answer, and the judge never judges it, so a
+  prerequisite nobody did can no longer be accepted with "proceed".
+- `running.json` records `trigger` (`tick` or `manual`), and the `lost-run` lesson records
+  `orchestratorId` and `trigger`: no orchestrator id means the wake died after taking the
+  lock and before launching.
+- Not carried over: the detached end-of-run refill wake (this edition has no wake called
+  from an orchestrator's session; decision wakes already run in detached processes), the
+  to-do display of queue waits and its refused-reply line (this edition shows queue waits
+  only through notifications), and the morning reminder for unmerged `retro/*` branches
+  (this edition has no deterministic morning check and no configured harness repository).
+
 ## 0.9.0 - 2026-11-09
 
 - Add an optional judge (`factory.judge`, `[judge]`): an independent model answers decisions
