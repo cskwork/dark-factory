@@ -18,10 +18,33 @@ runbook = "templates/RUNBOOK.template.md"
 # Tell confirm-dialog hooks that nobody is attending. Default: an empty map.
 env = { BLAST_RADIUS_UNATTENDED = "1" }
 
+# Minimal launch environment for every agent the factory launches (orchestrator, workers,
+# dreamer) and for the judge. Writing off to state_dir/min-env disables it and [judge]
+# extra_args. Example: Claude Code skips its auto memory index with this variable. Only drop
+# context an unattended agent does not need: keep settings sources (and their safety hooks)
+# loaded, and never use this to switch hooks off.
+[launch]
+env = { CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1" }
+
 [lessons]
 escalate_count = 3
 window_days = 14
 cooldown_days = 7
+# Optional closed list of lesson classes (lowercase names; "other" is always allowed).
+# When set, `factory.state lesson` requires a class; a class other than "other" groups
+# recurrences by kind + class instead of by the normalized what. Unset: the default list
+# brief, requirements, scope, verification, deploy, lost-run, decision, capacity, other
+# is accepted but optional.
+# classes = ["brief", "requirements", "scope", "verification", "deploy", "lost-run", "decision", "capacity", "other"]
+
+# Optional memory dreaming: after an idle tick, at most once a day, run command_check
+# (exit 10 = due, 0 = not due) and, when due, launch one agent with command_brief's output
+# as its prompt (the [dream] role's model, default the orchestrator's). Argv lists or shlex
+# strings, no shell. Omit to disable; off in state_dir/dream also disables it.
+# [dream]
+# command_check = ["bash", "/path/to/sdlc-kit/sdlc.sh", "dream", "--check"]
+# command_brief = ["bash", "/path/to/sdlc-kit/sdlc.sh", "dream"]
+# role = "orchestrator"
 
 # Owner liveness is opt-in for existing configurations. Both switches can also
 # be disabled by writing off to state_dir/liveness or 0 to state_dir/drain.
@@ -231,6 +254,9 @@ min_confidence = 0.8
 human_only = ["security-plan", "product-scope", "prod-data"] # choice humanReason values only a person answers
 risk_per_key_per_day = 2
 setting_title = "[factory] judge"
+# Appended to command while the minimal launch environment is on (state_dir/min-env not off).
+# The judge only reads, so a Claude Code judge can drop tools, MCP servers and slash commands.
+extra_args = ["--tools", "Read,Grep,Glob", "--strict-mcp-config", "--disable-slash-commands"]
 
 # Promotion approval from the tracker: approved by=judge when someone other than the operator
 # moved the ticket to qa_done_status after the operator's latest result comment (with media).

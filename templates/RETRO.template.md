@@ -2,6 +2,9 @@
 
 Read lessons.jsonl, runs.jsonl, triage-shadow.jsonl, decision outcomes, and verifier
 artifacts for the week. Separate observed failures from proposals and unknowns.
+Start from `python3 -m factory.lessons index --config CONFIG`; when one class or
+an `other` signature keeps recurring, propose a narrower class for `[lessons]
+classes` rather than a longer prompt.
 
 1. Count idle skips, launched runs, failed verifiers, repeated waits, and human
    decisions. Cite evidence for each recurring pattern; never infer model quality

@@ -1,6 +1,7 @@
 """Guard, detached orchestrator launch, and synchronous schema-bound workers."""
 import argparse
 from datetime import date
+import gzip
 import json
 import os
 import re
@@ -13,7 +14,7 @@ import uuid
 from .config import StateDirectoryError, load_config
 from .idle import decide, pending_focus
 from .state import append_json, locked, read_object, write_json
-from .lessons import append_lesson
+from .lessons import append_lesson, brief_stage, lesson_block, worker_lessons
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -121,9 +122,85 @@ def has_running(rows):
     return any(row["status"] == "running" for row in rows)
 
 
+# Guard tokens are uuid4().hex. Evidence or dump folders a person or agent leaves under runs/
+# are not runs: treating them as unfinished runs makes liveness query the launcher for each one.
+RUN_TOKEN = re.compile(r"[0-9a-f]{32}")
+RUN_MARKERS = ("ended", "lost", "archived", "attempts")
+RETAIN_DAYS = 7
+GZIP_BYTES = 50 * 1024 * 1024
+GZIP_PER_CALL = 3
+
+
+def run_folder(cfg, path, known=None):
+    """A run: a token-shaped name, the current lock's token, or a folder the factory marked as a run."""
+    if not path.is_dir() or not valid_token(path.name):
+        return False
+    if known is None:
+        try:
+            known = {read_object(cfg.state_dir / "running.json").get("token")}
+        except (OSError, ValueError):
+            known = set()
+    return (RUN_TOKEN.fullmatch(path.name) is not None or path.name in known
+            or any((path / name).exists() for name in RUN_MARKERS))
+
+
+def stray_runs(cfg):
+    """Entries under runs/ that are not runs. Reported only; never moved or deleted."""
+    root = cfg.state_dir / "runs"
+    return sorted(path.name for path in root.iterdir() if not run_folder(cfg, path)) if root.is_dir() else []
+
+
 def _pending_runs(cfg):
     return [p for p in sorted((cfg.state_dir / "runs").glob("*"))
-            if p.is_dir() and valid_token(p.name) and not (p / "ended").exists()]
+            if run_folder(cfg, p) and not (p / "ended").exists()]
+
+
+def _gzip_file(path):
+    target = path.with_name(path.name + ".gz")
+    if target.exists():
+        raise FileExistsError(str(target))
+    scratch = path.with_name("." + path.name + ".gz.tmp")
+    try:
+        with path.open("rb") as source, gzip.open(scratch, "wb") as out:
+            while chunk := source.read(1024 * 1024):
+                out.write(chunk)
+        with scratch.open("rb") as written:
+            os.fsync(written.fileno())
+        os.replace(scratch, target)
+    finally:
+        scratch.unlink(missing_ok=True)
+    path.unlink()  # Only after the compressed copy is in place: the content stays in .gz.
+
+
+def compress_old_runs(cfg, now=None, limit=GZIP_PER_CALL):
+    """Gzip files over 50 MB in ended and archived runs older than 7 days; never delete a run.
+
+    At most `limit` files per call. A fully processed run gets a `retained` marker and is not
+    walked again. Returns (compressed, failed)."""
+    now = time.time() if now is None else now
+    done = failed = 0
+    for marker in sorted((cfg.state_dir / "runs").glob("*/archived")):
+        run = marker.parent
+        ended = run / "ended"
+        if (not run_folder(cfg, run) or not ended.exists() or (run / "retained").exists()
+                or now - ended.stat().st_mtime < RETAIN_DAYS * 86400):
+            continue
+        settled = True
+        for path in sorted(run.rglob("*")):
+            if (not path.is_file() or path.is_symlink() or path.suffix == ".gz"
+                    or path.stat().st_size <= GZIP_BYTES):
+                continue
+            if done >= limit:
+                return done, failed
+            try:
+                _gzip_file(path)
+                done += 1
+            except OSError:
+                failed += 1
+                settled = False
+        if settled:
+            mark_run(cfg, run.name, "retained")
+    return done, failed
 
 
 def owns(cfg, token):
@@ -375,7 +452,20 @@ def release_run(cfg, run, retry=False, unlaunched=False):
                     write_json(cfg.state_dir / "guard-state.json", state)
 
 
-def launcher(cfg, role, token=None, key=None, attempt=None):
+def launch_id(cfg, stdout):
+    """The detached agent id a launcher printed: raw text or launcher.launch_id_field of its JSON."""
+    identity = stdout.strip()
+    try:
+        identity = _field(json.loads(identity), cfg.get("launcher", {}).get("launch_id_field", "id"))
+    except json.JSONDecodeError:
+        pass
+    if not isinstance(identity, str) or not identity:
+        raise ValueError("invalid launcher id")
+    return identity
+
+
+def launcher(cfg, role, token=None, key=None, attempt=None, label=None):
+    """The launch argv of a role; label replaces {role} in the template (the dreamer reuses a role's model)."""
     roles = cfg.get("roles", {})
     if role in ("waker", "orchestrator"):
         mapping = roles.get(role)
@@ -385,7 +475,7 @@ def launcher(cfg, role, token=None, key=None, attempt=None):
                                               for k in ("provider", "model", "thinking", "mode")):
         raise ValueError("unknown or invalid role")
     template = cfg.get("launcher", {}).get("command", DEFAULT_LAUNCHER)
-    context = {**mapping, "role": role, "token": token or "", "key": key or "", "attempt": attempt or ""}
+    context = {**mapping, "role": label or role, "token": token or "", "key": key or "", "attempt": attempt or ""}
     command = cfg.command(template, **context)
     settings = cfg.get("launcher", {})
     if token and settings.get("run_label_args"):
@@ -411,7 +501,7 @@ def archive_finished(cfg):
     archived = failed = 0
     for marker in sorted((cfg.state_dir / "runs").glob("*/ended")):
         token = marker.parent.name
-        if not valid_token(token) or (marker.parent / "archived").exists():
+        if not run_folder(cfg, marker.parent) or (marker.parent / "archived").exists():
             continue
         try:
             rows = agents(cfg, token, archived=False, strict=False)
@@ -451,6 +541,15 @@ def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
         if manual and key:
             from .state import append_pending
             append_pending(cfg.state_dir, json.dumps({"at": time.time(), "key": key}))
+        elif not manual and not dry_run and "(idle:" in message:
+            # An idle tick may start the optional daily memory dreamer; it never changes this tick's outcome.
+            from .dream import tick
+            try:
+                outcome = tick(cfg)[0]
+                if outcome != "unset":
+                    print("factory-wake: dream " + outcome)
+            except Exception as error:  # noqa: BLE001 - the tick already succeeded
+                print(f"factory-wake: dream error {type(error).__name__}")
         return 0
     try:
         runbook = cfg.resolve(cfg.get("runbook", "templates/RUNBOOK.template.md"), cfg.path.parent)
@@ -460,28 +559,30 @@ def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
                   f"Read {ROOT / 'templates/ORCHESTRATOR.template.md'} and runbook {runbook}. "
                   f"Read guard decision {cfg.state_dir / 'guard-last.json'}. "
                   "Inspect idle.json; refresh intake if scan.json is absent or the scan failed. "
-                  "Decide units, delegate, inspect verifier JSON, report, and release your lock in all outcomes.")
-        command = launcher(cfg, "orchestrator", token=run["token"]) + ["--no-wait", "--title", "Factory orchestrator", "-q", prompt]
+                  "Decide units, delegate, inspect verifier JSON, report, and release your lock in all outcomes."
+                  + lesson_block(cfg))
+        launch_env = cfg.launch_env()
+        command = (launcher(cfg, "orchestrator", token=run["token"]) + cfg.env_flags(launch_env)
+                   + ["--no-wait", "--title", "Factory orchestrator", "-q", prompt])
         if dry_run:
             print("dry-run: " + shlex.join(command))
             release_run(cfg, run, retry=True, unlaunched=True)
             return 0
         archived, archive_failed = archive_finished(cfg)
-        print(f"factory-wake: archived={archived} archive_failed={archive_failed}")
+        try:
+            gzipped, gzip_failed = compress_old_runs(cfg)
+        except OSError:
+            gzipped, gzip_failed = 0, 1
+        print(f"factory-wake: archived={archived} archive_failed={archive_failed} "
+              f"gzipped={gzipped} gzip_failed={gzip_failed} non_run={len(stray_runs(cfg))}")
         # The launcher must return a detached run identifier, not wait for the model.
         response = subprocess.run(command, cwd=cfg.project_root, stdin=subprocess.DEVNULL,
+                                  **({"env": {**os.environ, **launch_env}} if launch_env else {}),
                                   capture_output=True, text=True, timeout=cfg.get("launch_timeout_seconds", 60))
         if response.returncode or not response.stdout.strip():
             raise ValueError("launch failed")
         try:
-            identity = response.stdout.strip()
-            try:
-                value = json.loads(identity)
-                identity = _field(value, cfg.get("launcher", {}).get("launch_id_field", "id"))
-            except json.JSONDecodeError:
-                pass
-            if not isinstance(identity, str) or not identity:
-                raise ValueError("invalid launcher id")
+            identity = launch_id(cfg, response.stdout)
             with locked(cfg.state_dir / ".guard.lock"):
                 current = read_object(cfg.state_dir / "running.json")
                 if current.get("token") == run["token"]:
@@ -593,11 +694,9 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     text = Path(brief).read_text()
     attempt_id = uuid.uuid4().hex
     command = launcher(cfg, role, token=token, key=key, attempt=attempt_id)
-    worker_env = cfg.get("worker", {}).get("env", {})
-    env_args = cfg.get("launcher", {}).get("env_args", [])
-    for name, value in worker_env.items():
-        if env_args != []:
-            command += cfg.command(env_args, name=name, value=value)
+    # [launch] env (every agent; off with state_dir/min-env), then [worker] env, which wins on a clash.
+    worker_env = {**cfg.launch_env(), **cfg.get("worker", {}).get("env", {})}
+    command += cfg.env_flags(worker_env)
     attempt = (run_path(cfg, token) / "attempts" / attempt_id if token else
                cfg.state_dir / "worker-attempts" / attempt_id)
     attempt.mkdir(parents=True, exist_ok=False)
@@ -631,6 +730,7 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
               "(rm→unlink, branch -D→update-ref); record the denied command in summary, leave it for the orchestrator and finish. "
               + ("Caller requirements=" + json.dumps(declaration['manifest']) +
                  ". Do not advance the declared queue stage. Return evidence for the caller gate first. " if declaration else "")
+              + worker_lessons(cfg, declaration["manifest"]["stage"] if declaration else brief_stage(text))
               + "\n\n" + text)
     command += ["--title", title, "--wait-timeout", timeout,
                 "--output-schema", str(ROOT / "schemas/worker-result.schema.json"), prompt]
@@ -754,6 +854,8 @@ def main(argv=None):
     parser.add_argument("--recover")
     parser.add_argument("--reconciled")
     parser.add_argument("--blocked")
+    parser.add_argument("--runs-report", action="store_true",
+                        help="guard: list entries under runs/ that are not runs (never changed)")
     parser.add_argument("--unit", default="unit")
     parser.add_argument("--requirements")
     parser.add_argument("--token")
@@ -767,6 +869,9 @@ def main(argv=None):
         if args.kind == "guard":
             if args.owns is not None:
                 return 0 if owns(cfg, args.owns) else 1
+            if args.runs_report:
+                print(json.dumps({"nonRun": stray_runs(cfg)}))
+                return 0
             if args.recover:
                 print(json.dumps(recover_run(cfg, args.recover, args.token)))
                 return 0

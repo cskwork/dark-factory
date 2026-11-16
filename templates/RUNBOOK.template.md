@@ -489,7 +489,16 @@ judge reads it back through `facts_cmd` and treats a missing comment as a failur
 
 Use `python3 -m factory.state --config CONFIG lesson --json
 '{"kind":"infra_fail","key":"PROJ-123","what":"Verifier unavailable","evidence":"verify.json","proposal":"Repair the adapter"}'`.
-All writers use `factory.lessons.append_lesson`; never append lessons directly.
+All writers use `factory.lessons.append_lesson`; never append lessons directly
+(no `>>`, no editor). Lessons record what the factory got wrong so it is not
+repeated; ticket facts belong in the queue and tracker. An optional `class` comes
+from `[lessons] classes` (required by the CLI once configured; `other` always
+allowed); a class other than `other` makes kind + class the signature, otherwise
+kind + normalized what as before. Add `stage` so workers of that stage see it and
+`suggestion` for the index. `python3 -m factory.lessons index --config CONFIG
+[--stage S] [--kind K]` prints at most 20 lines (class, count, last date, latest
+suggestion, fix state); the orchestrator prompt carries it, a worker prompt only
+its stage's lines, and a broken lesson file only drops the block.
 Legacy `observation` fields remain readable. The signature combines kind and
 normalized what, stripping changing keys, SHAs, numbers, timestamps and comment
 ids. `[lessons]` defaults to `escalate_count=3`, `window_days=14`,

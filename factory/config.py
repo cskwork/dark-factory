@@ -21,6 +21,28 @@ def argv(value):
     return bool(value) and (strings(value) or isinstance(value, str) and bool(value.strip()))
 
 
+def environment(value):
+    """A NAME -> value map of strings that can be passed to a child process."""
+    return isinstance(value, dict) and all(
+        isinstance(name, str) and name and "=" not in name and "\0" not in name
+        and isinstance(item, str) and "\0" not in item for name, item in value.items())
+
+
+# A lesson class names one failure family; `other` keeps the what-based signature.
+CLASS_NAME = r"[a-z][a-z0-9-]*"
+DEFAULT_LESSON_CLASSES = ["brief", "requirements", "scope", "verification", "deploy",
+                          "lost-run", "decision", "capacity", "other"]
+
+
+def switched_off(path):
+    """A switch file whose first word is `off`. A missing file is on; an unreadable one is on."""
+    try:
+        words = Path(path).read_text().split()
+    except OSError:
+        return False
+    return bool(words) and words[0].lower() == "off"
+
+
 class Config:
     def __init__(self, data, path):
         self.data = data
@@ -77,15 +99,19 @@ class Config:
             value = lessons.get(name, default)
             if type(value) is not int or value <= 0:
                 raise ValueError("invalid lessons." + name)
+        classes = lessons.get("classes")
+        if classes is not None and (not strings(classes) or not classes or any(
+                re.fullmatch(CLASS_NAME, name) is None for name in classes)):
+            raise ValueError("invalid lessons.classes: a nonempty list of lowercase names")
         self._validate_judge(self.get("judge", {}))
-        worker = self.get("worker", {})
-        if not isinstance(worker, dict):
-            raise ValueError("invalid worker settings")
-        env = worker.get("env", {})
-        if (not isinstance(env, dict) or any(
-                not isinstance(name, str) or not name or "=" in name or "\0" in name
-                or not isinstance(value, str) or "\0" in value for name, value in env.items())):
-            raise ValueError("invalid worker.env")
+        for section in ("worker", "launch"):
+            settings = self.get(section, {})
+            if not isinstance(settings, dict) or not environment(settings.get("env", {})):
+                raise ValueError("invalid " + section + ".env")
+        dream = self.get("dream", {})
+        if not isinstance(dream, dict) or any(
+                dream.get(name) is not None and not argv(dream[name]) for name in ("command_check", "command_brief")):
+            raise ValueError("invalid dream settings: command_check and command_brief are shell command strings")
 
     @staticmethod
     def _validate_judge(judge):
@@ -102,6 +128,8 @@ class Config:
                 or not strings(judge.get("human_only", []))
                 or not strings([judge.get("setting_title", "[factory] judge")])):
             raise ValueError("invalid judge settings")
+        if not strings(judge.get("extra_args", [])):
+            raise ValueError("invalid judge.extra_args: a list of strings")
         for name, default in (("risk_per_key_per_day", 2), ("timeout_seconds", 900)):
             value = judge.get(name, default)
             if type(value) is not int or value <= 0:
@@ -117,6 +145,31 @@ class Config:
             rule.get("nudge_template", "{reporter}").format_map({"reporter": "", "status": ""})
         except (KeyError, ValueError, IndexError) as error:
             raise ValueError("invalid judge.promotion.nudge_template: use {reporter} and {status}") from error
+
+    def lesson_classes(self):
+        """(allowed classes, required): the configured list plus `other`, or the default list (optional)."""
+        configured = self.get("lessons", {}).get("classes")
+        names = list(configured if configured is not None else DEFAULT_LESSON_CLASSES)
+        if "other" not in names:
+            names.append("other")
+        return names, configured is not None
+
+    def min_env(self):
+        """Minimal launch environment is on unless state_dir/min-env says off."""
+        return not switched_off(self.state_dir / "min-env")
+
+    def launch_env(self):
+        """[launch] env for every agent launch; empty when state_dir/min-env is off."""
+        return dict(self.get("launch", {}).get("env", {})) if self.min_env() else {}
+
+    def env_flags(self, env):
+        """Launcher flags carrying env (launcher.env_args per entry; none when unset)."""
+        template = self.get("launcher", {}).get("env_args", [])
+        flags = []
+        for name, value in env.items():
+            if template:
+                flags += self.command(template, name=name, value=value)
+        return flags
 
     @staticmethod
     def resolve(value, parent):

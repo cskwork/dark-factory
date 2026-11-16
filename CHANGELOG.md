@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.11.0 - 2026-11-16
+
+- Lessons take an optional `class` from a closed list (`[lessons] classes`; `other` always
+  allowed; default list `brief`, `requirements`, `scope`, `verification`, `deploy`,
+  `lost-run`, `decision`, `capacity`, `other`). A class other than `other` makes the signature
+  kind + class; rows without one keep the kind + normalized-what signature byte for byte.
+  `factory.state lesson` requires a class only when `[lessons] classes` is configured.
+- `python3 -m factory.lessons index` prints at most 20 lines for the last `window_days`: per
+  class the count, last date, latest suggestion and fix state. The orchestrator prompt carries
+  it and each worker prompt only its unit stage's lines; an unreadable lesson file drops the
+  block instead of failing the launch.
+- Minimal launch environment: `[launch] env` applies to every agent launch (orchestrator,
+  workers, dreamer; `[worker] env` still wins for workers) and to the judge; `[judge]
+  extra_args` extend the judge command. `off` in `state_dir/min-env` disables both. The
+  example drops Claude Code's auto memory (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=1`); hooks and
+  settings sources must stay loaded.
+- Queue notes over 20 lines or 4,000 characters move their oldest entries to
+  `state_dir/notes/<KEY>.md` on every queue write; the newest entry stays last.
+- `runs/` entries that are not runs (not a 32-hex token, the current lock token, or a folder
+  with a run marker) are ignored by liveness, recovery and archival and reported
+  (`factory-guard --runs-report`). Each launching wake gzips files over 50 MB in runs ended
+  and archived more than 7 days ago, at most 3 per wake; nothing is deleted.
+- Optional memory dreaming: `[dream] command_check` / `command_brief` launch one agent with the
+  brief after an idle tick, at most once a day (check exit 10 = due), recorded in
+  `state_dir/dream-last.json`; `off` in `state_dir/dream` disables it.
+- Not carried over: splitting the orchestrator instructions into core and reference files,
+  and a per-ticket context packet. This edition's orchestrator template is already short
+  and has no ticket-orchestrator layer.
+
 ## 0.10.1 - 2026-11-16
 
 - Capacity and resource deferrals after the preceding guard no longer produce false
