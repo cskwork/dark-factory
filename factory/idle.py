@@ -407,7 +407,8 @@ def _decide(cfg, classifier=None, force_refresh=False):
                     raise ValueError("invalid defer count")
                 if not same and old and defer_count:
                     item["deferCount"] = defer_count = 0
-                exempt = (workers >= 1 and bool(state.get("at"))
+                exempt = ((workers >= 1 or item.get("deferReason") in ("capacity", "resource"))
+                          and bool(state.get("at"))
                           and item.get("deferredAt") is not None
                           and epoch(item["deferredAt"]) > epoch(state["at"]) and defer_count < 4)
                 stuck = (same and not exempt) or defer_count >= 4

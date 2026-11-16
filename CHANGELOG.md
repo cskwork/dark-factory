@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.10.1 - 2026-11-16
+
+- Capacity and resource deferrals after the preceding guard no longer produce false
+  stuck lessons or alerts when the previous run started no workers. Other deferrals
+  still require worker progress, and 4 consecutive deferrals still count as stuck.
+
 ## 0.10.0 - 2026-11-10
 
 - A `fix-now` answer to a recurring-lesson decision is no longer forgotten: it becomes one
