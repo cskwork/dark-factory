@@ -290,9 +290,10 @@ judges it.
 Other waits stay idle. Stuck hashes exclude deferredAt, deferReason, deferCount,
 updatedAt, createdAt, backoffUntil, and backoffLevel. Semantic changes reset
 deferCount. An unchanged runnable item is normally suppressed on the second tick
-with an infra_fail lesson and one notification. A deferral after the preceding
-guard is exempt only if that run's summary has workers >= 1; deferCount >= 4
-never qualifies. A zero-work run cannot exempt its deferrals.
+with an infra_fail lesson and one notification. A deferral strictly after the
+preceding guard's state.at is exempt when deferReason is capacity or resource,
+even if that run's summary has workers = 0. Other reasons require workers >= 1;
+deferCount >= 4 never qualifies.
 
 `approvals.json` maps keys to `{decision_id,approved:true,used_at:null,...}`.
 Stamp used_at through a state patch after scoped consumption. An unused approval

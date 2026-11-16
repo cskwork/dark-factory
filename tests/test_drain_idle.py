@@ -1,4 +1,4 @@
-"""Deferrals require real worker progress; backoff applies to individual items."""
+"""Deferrals need worker progress or capacity/resource limits; backoff is per item."""
 from datetime import date
 import json
 import time
@@ -26,7 +26,7 @@ class DrainIdleTests(Fixture):
         decisions.start()
         self.addCleanup(decisions.stop)
 
-    def prior_run(self, workers=1, defer_count=1):
+    def prior_run(self, workers=1, defer_count=1, defer_reason="budget"):
         self.write("queue.json", {f"PROJ-{index}": {"waiting": None, "stage": "tobe"} for index in range(4)})
         idle.decide(self.cfg)
         state = self.read("guard-state.json")
@@ -36,7 +36,7 @@ class DrainIdleTests(Fixture):
         queue = self.read("queue.json")
         queue["PROJ-0"]["waiting"] = "reporter"
         for index in range(1, 4):
-            queue[f"PROJ-{index}"].update(deferredAt=iso(self.now), deferReason="budget", deferCount=defer_count)
+            queue[f"PROJ-{index}"].update(deferredAt=iso(self.now), deferReason=defer_reason, deferCount=defer_count)
         self.write("queue.json", queue)
 
     def test_four_runnable_one_processed_three_deferred_are_not_stuck(self):
@@ -56,6 +56,57 @@ class DrainIdleTests(Fixture):
         requests = list((self.state / "decisions").glob("*.request.json"))
         self.assertEqual(len(requests), 1)
         self.assertEqual(json.loads(requests[0].read_text())["recommended"], "fix-now")
+
+    def test_capacity_deferral_with_zero_workers_is_not_stuck(self):
+        self.prior_run(workers=0, defer_reason="capacity")
+        result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 1)
+        self.assertIn("queue-runnable:PROJ-1", result["reasons"])
+        self.assertEqual(result["stuck"], [])
+        self.assertEqual(self.notifications, [])
+
+    def test_resource_deferral_with_zero_workers_is_not_stuck(self):
+        self.prior_run(workers=0, defer_reason="resource")
+        result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 1)
+        self.assertIn("queue-runnable:PROJ-1", result["reasons"])
+        self.assertEqual(result["stuck"], [])
+        self.assertEqual(self.notifications, [])
+
+    def test_unchanged_item_without_deferral_is_stuck_after_wake(self):
+        self.write("queue.json", {"PROJ-1": {"waiting": None, "stage": "tobe"}})
+        first, code = idle.decide(self.cfg)
+        self.assertEqual(code, 1)
+        self.assertIn("queue-runnable:PROJ-1", first["reasons"])
+        guard_at = self.read("guard-state.json")["at"]
+        self.write("runs/previous/summary.json", {"startedAt": guard_at + 1, "workers": 1})
+        result, code = idle.decide(self.cfg)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["stuck"], ["stuck-runnable:PROJ-1"])
+
+    def test_four_capacity_or_resource_deferrals_with_zero_workers_are_stuck(self):
+        for reason in ("capacity", "resource"):
+            with self.subTest(reason=reason):
+                self.prior_run(workers=0, defer_count=4, defer_reason=reason)
+                result, code = idle.decide(self.cfg)
+                self.assertEqual(code, 0)
+                self.assertEqual(result["stuck"], ["stuck-runnable:PROJ-1",
+                                                  "stuck-runnable:PROJ-2",
+                                                  "stuck-runnable:PROJ-3"])
+
+    def test_capacity_or_resource_deferral_must_be_newer_than_guard(self):
+        for reason in ("capacity", "resource"):
+            for offset in (0, -1):
+                with self.subTest(reason=reason, offset=offset):
+                    self.prior_run(workers=0, defer_reason=reason)
+                    previous_at = self.read("guard-state.json")["at"]
+                    queue = self.read("queue.json")
+                    for index in range(1, 4):
+                        queue[f"PROJ-{index}"]["deferredAt"] = previous_at + offset
+                    self.write("queue.json", queue)
+                    result, code = idle.decide(self.cfg)
+                    self.assertEqual(code, 0)
+                    self.assertIn("stuck-runnable:PROJ-1", result["stuck"])
 
     def test_four_deferrals_are_stuck_and_notify_once_per_item(self):
         self.prior_run(defer_count=4)
