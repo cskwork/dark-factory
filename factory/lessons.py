@@ -69,6 +69,7 @@ def _decision_status(cfg, sig, now, cooldown):
     answers = {row["decision_id"]: _time(row["at"]) for row in _rows(cfg.state_dir / "decisions.jsonl")
                if isinstance(row, dict) and row.get("event") == "decision"}
     todo = read_object(cfg.state_dir / "decision-pages/todo.json")
+    status = None
     for path in sorted((cfg.state_dir / "decisions").glob("*.request.json")):
         request = read_object(path)
         if request.get("lessonSignature") != sig:
@@ -76,11 +77,12 @@ def _decision_status(cfg, sig, now, cooldown):
         identity = request["decision_id"]
         if identity in answers:
             if now - answers[identity] < cooldown:
-                return "answer-cooldown"
+                status = "answer-cooldown"
         elif todo.get(identity, {}).get("state") not in {"failed", "closed", "held"}:
             # A claim without an audit row can be a decision currently being recorded.
+            # An open request outranks an answered one, whatever order the random ids sort in.
             return "already-open"
-    return None
+    return status
 
 
 def _decision_key(cfg, rows):
