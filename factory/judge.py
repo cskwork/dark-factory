@@ -125,8 +125,14 @@ def ask(cfg, data, *, runner=subprocess.run):
     rules = RULES.replace("{min_confidence}", str(settings(cfg).get("min_confidence", 0.8)))
     try:
         command = cfg.command(settings(cfg)["command"], schema=json.dumps(VERDICT))
+        extra = {}
+        if cfg.min_env():  # state_dir/min-env=off restores the plain command and environment.
+            command += list(settings(cfg).get("extra_args", []))
+            launch_env = cfg.launch_env()
+            if launch_env:
+                extra["env"] = {**os.environ, **launch_env}
         proc = runner(command, input=rules + json.dumps(data, ensure_ascii=False), capture_output=True,
-                      text=True, timeout=settings(cfg).get("timeout_seconds", 900), cwd=cfg.project_root)
+                      text=True, timeout=settings(cfg).get("timeout_seconds", 900), cwd=cfg.project_root, **extra)
         out = json.loads(proc.stdout)
         if isinstance(out, dict) and "structured_output" in out:
             if out.get("is_error"):

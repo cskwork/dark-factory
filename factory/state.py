@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
 
@@ -71,6 +72,60 @@ def _target(directory, filename):
     return path
 
 
+# A queue note grows by appending " | " + entry. Every agent rereads queue.json, so a note over
+# these limits moves its oldest entries to state_dir/notes/<KEY>.md (appended, never deleted).
+NOTE_SEPARATOR = " | "
+NOTE_MAX_LINES = 20
+NOTE_MAX_CHARS = 4000
+NOTE_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def note_marker(key):
+    return f"(earlier notes: notes/{key}.md){NOTE_SEPARATOR}"
+
+
+def _cap_note(directory, key, row, previous):
+    """Keep a changed note within the limits, newest entry last; call under the state lock.
+
+    A writer that prepended its entry (new + " | " + old) is reordered to old + " | " + new
+    first, so trimming the front never drops the newest entry. The overflow is appended to
+    notes/<KEY>.md before the queue is written."""
+    note = row.get("note")
+    old = previous.get("note") if isinstance(previous, dict) else None
+    if not isinstance(note, str) or note == old:
+        return
+    if isinstance(old, str) and old.strip() and note.endswith(old) and not note.startswith(old):
+        added = note[:-len(old)].rstrip(" |\n")
+        if added:
+            note = old + NOTE_SEPARATOR + added
+    row["note"] = note
+    if (len(note) <= NOTE_MAX_CHARS and note.count("\n") < NOTE_MAX_LINES) or not NOTE_KEY.fullmatch(str(key)):
+        return
+    marker = note_marker(key)
+    body = note
+    while body.startswith(marker):
+        body = body[len(marker):]
+    lines = body.split("\n")
+    start = len("\n".join(lines[:-NOTE_MAX_LINES])) + 1 if len(lines) > NOTE_MAX_LINES else 0
+    budget = NOTE_MAX_CHARS - len(marker)
+    if len(body) - start > budget:
+        cut = len(body) - budget
+        # Cut after the next entry boundary so no entry is split.
+        boundaries = [found + len(mark) for mark in (NOTE_SEPARATOR, "\n")
+                      for found in [body.find(mark, cut)] if found != -1]
+        start = min(boundaries) if boundaries else cut
+    overflow, kept = body[:start].rstrip(" |\n"), body[start:].lstrip(" |\n")
+    if overflow:
+        path = _target(directory, "notes/" + key + ".md")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as out:
+            out.write(f"## {datetime.now(timezone.utc).isoformat(timespec='seconds')} moved from the queue note\n\n"
+                      f"{overflow}\n\n")
+            out.flush()
+            os.fsync(out.fileno())
+    row["note"] = marker + kept
+
+
 def transaction(directory, filename, callback):
     """Apply a mutation to the latest object; failures leave the original intact."""
     directory = Path(directory)
@@ -83,6 +138,7 @@ def transaction(directory, filename, callback):
             for key, row in data.items():
                 previous = before.get(key)
                 if isinstance(row, dict) and row != previous:
+                    _cap_note(directory, key, row, previous)
                     if not row.get("createdAt"):
                         row["createdAt"] = datetime.now(timezone.utc).isoformat()
                     if (isinstance(previous, dict) and "deferCount" in row
@@ -206,6 +262,11 @@ def main(argv=None):
             append_pending(directory, args.line if args.line is not None else json.dumps(args.row))
         elif args.command == "lesson":
             from .lessons import append_lesson
+            if not isinstance(args.row, dict):
+                raise ValueError("lesson JSON must be an object")
+            from .lessons import validate_class
+            # A class is required only where the operator configured [lessons] classes.
+            validate_class(cfg, args.row, required=cfg.lesson_classes()[1])
             print(json.dumps(append_lesson(cfg, args.row)))
         elif args.command == "lesson-fixed":
             from .lessons import mark_fixed
@@ -216,8 +277,9 @@ def main(argv=None):
     except StateDirectoryError as error:
         print("state: " + str(error), file=sys.stderr)
         return 1
-    except (OSError, ValueError, TypeError):
-        print("state: invalid state or arguments", file=sys.stderr)
+    except (OSError, ValueError, TypeError) as error:
+        detail = str(error) if str(error).startswith("lesson class") else "invalid state or arguments"
+        print("state: " + detail, file=sys.stderr)
         return 1
 
 

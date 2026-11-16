@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 
 from .state import locked, read_object, write_json
 
@@ -14,8 +15,21 @@ def _what(row):
     return row.get("what", row.get("observation"))
 
 
+def validate_class(cfg, row, *, required=False):
+    """An optional `class` must be one of the configured classes; `required` makes it mandatory."""
+    allowed, _ = cfg.lesson_classes()
+    if ("class" not in row and required) or ("class" in row and row["class"] not in allowed):
+        raise ValueError("lesson class must be one of: " + ", ".join(allowed))
+
+
 def signature(row):
-    """Only kind and normalized what identify recurrence; retain evidence separately."""
+    """Kind + class when a class other than `other` is given; otherwise kind + normalized what.
+
+    The what-based form is unchanged, so rows without a class keep their old signatures.
+    Evidence is retained separately and never part of the identity."""
+    label = row.get("class")
+    if isinstance(label, str) and label and label != "other":
+        return hashlib.sha256((row["kind"].strip().lower() + ":class:" + label).encode()).hexdigest()
     what = _what(row)
     what = re.sub(r"\b\d{4}-\d\d-\d\d(?:[T ][\d:.]+(?:Z|[+-]\d\d:\d\d)?)?", " ", what)
     what = re.sub(r"\b[A-Z][A-Z0-9]*-\d+\b", " ", what, flags=re.I)
@@ -136,6 +150,7 @@ def append_lesson(cfg, row, *, now=None, opener=None, todo=None):
             or not isinstance(_what(row), str) or not _what(row).strip()):
         raise ValueError("lesson needs nonempty kind and what (or observation)")
     row = dict(row)
+    validate_class(cfg, row)
     row.setdefault("what", _what(row))
     row.setdefault("at", now.isoformat())
     _time(row["at"])
@@ -321,3 +336,132 @@ def mark_fixed(cfg, prefix, commit, *, now=None, todo=None):
         fix.update(state="fixed", commit=commit, closedAt=now.isoformat())
         write_json(cfg.state_dir / FIXES, fixes)
         return {"signature": found[0], "state": "fixed", "commit": commit}
+
+
+INDEX_LINES = 20
+INDEX_LINE_CHARS = 124
+HEADING = "Recent lessons (last {days} days; do not repeat these mistakes):"
+
+
+def _index_fix(rows, fixes):
+    """An open fix wins over a fixed one; a fixed one names its latest commit."""
+    found = [fixes.get(sig) for sig in {signature(row) for row in rows}]
+    found = [fix for fix in found if isinstance(fix, dict)]
+    if any(fix.get("state") == "open" for fix in found):
+        return "open"
+    fixed = [fix for fix in found if fix.get("state") == "fixed" and fix.get("commit")]
+    if fixed:
+        return "fixed " + str(max(fixed, key=lambda fix: (str(fix.get("closedAt", "")), str(fix["commit"])))["commit"])
+    return "none"
+
+
+def _compact(value, limit):
+    value = " ".join(value.split())
+    return value if len(value) <= limit else value[:max(limit - 1, 0)] + "…"
+
+
+def index(cfg, *, kind=None, stage=None, limit=INDEX_LINES, now=None):
+    """Read-only summary of the last window_days of lessons, one line per class.
+
+    Rows with a configured class group by class; rows without one (or with a class no longer
+    configured) group by signature and show only when they repeat. kind and stage filter on the
+    stored row values. Each line: label, count, last date, latest suggestion, fix state.
+    Takes no lock and opens no decision."""
+    if type(limit) is not int or limit < 0:
+        raise ValueError("--max must be a nonnegative integer")
+    limit = min(limit, INDEX_LINES)
+    path = cfg.state_dir / "lessons.jsonl"
+    if not limit or not path.exists():
+        return ""
+    now = _time(datetime.now(timezone.utc) if now is None else now)
+    window = timedelta(days=cfg.get("lessons", {}).get("window_days", 14))
+    allowed, _ = cfg.lesson_classes()
+    groups = {}
+    for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not text.strip():
+            continue
+        try:
+            row = json.loads(text)
+        except ValueError as error:
+            raise ValueError(f"{path}:{number}: invalid lesson JSON") from error
+        if (not isinstance(row, dict) or not isinstance(row.get("kind"), str) or not row["kind"].strip()
+                or not isinstance(_what(row), str) or not _what(row).strip()):
+            continue
+        if (kind is not None and row.get("kind") != kind) or (stage is not None and row.get("stage") != stage):
+            continue
+        try:
+            stamp = _time(row.get("at"))
+        except (ValueError, TypeError, OverflowError):
+            continue
+        if not now - window <= stamp <= now:
+            continue
+        row["_at"] = stamp
+        label = row.get("class")
+        group = ("class", label) if label in allowed and label != "other" else ("signature", signature(row))
+        groups.setdefault(group, []).append(row)
+    fixes = read_object(cfg.state_dir / FIXES)
+    lines = []
+    for group, rows in sorted(groups.items(), key=lambda item: (-len(item[1]), item[0])):
+        if group[0] == "signature" and len(rows) < 2:
+            continue
+        rows.sort(key=lambda row: row["_at"])
+        latest = rows[-1]
+        label = group[1] if group[0] == "class" else _compact(_what(latest), 36)
+        suggestions = [row[name] for row in rows for name in ("suggestion", "proposal")
+                       if isinstance(row.get(name), str) and row[name].strip()]
+        prefix = f"- {label} x{len(rows)} (last {latest['_at'].date().isoformat()}) — "
+        suffix = f" [fix: {_index_fix(rows, fixes)}]"
+        suggestion = suggestions[-1] if suggestions else "no suggestion"
+        lines.append(prefix + _compact(suggestion, INDEX_LINE_CHARS - len(prefix) - len(suffix)) + suffix)
+        if len(lines) >= limit:
+            break
+    return "\n".join(lines)
+
+
+def lesson_block(cfg, *, stage=None):
+    """A prompt block of the lesson index, or "" on no lessons or any failure (fail-open)."""
+    try:
+        content = index(cfg, stage=stage)
+        if not content:
+            return ""
+        days = cfg.get("lessons", {}).get("window_days", 14)
+        return "\n\n" + HEADING.format(days=days) + "\n" + content
+    except Exception as error:  # A broken lesson file must never stop a launch.
+        print(f"lessons: index skipped: {type(error).__name__}: {str(error)[:200]}", file=sys.stderr)
+        return ""
+
+
+def brief_stage(text):
+    """An explicit `stage: NAME` (or stage=NAME) line in a brief; None when absent or ambiguous."""
+    found = set(re.findall(r"""(?m)^\s*["']?stage["']?\s*[:=]\s*["']?([a-z][a-z0-9_-]*)["']?\s*,?\s*$""", text))
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def worker_lessons(cfg, stage):
+    """Workers see only lessons recorded for their unit stage; without a known stage, none."""
+    return lesson_block(cfg, stage=stage) if stage else ""
+
+
+def main(argv=None):
+    import argparse
+    from .config import load_config
+    parser = argparse.ArgumentParser(description=__doc__)
+    commands = parser.add_subparsers(dest="command", required=True)
+    summary = commands.add_parser("index", help="read-only per-class summary of recent lessons")
+    summary.add_argument("--config")
+    summary.add_argument("--kind")
+    summary.add_argument("--stage")
+    summary.add_argument("--max", type=int, default=INDEX_LINES)
+    args = parser.parse_args(argv)
+    try:
+        result = index(load_config(args.config), kind=args.kind, stage=args.stage, limit=args.max)
+    except (OSError, ValueError, TypeError) as error:
+        print("lessons: " + str(error), file=sys.stderr)
+        return 1
+    if result:
+        print(result)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
