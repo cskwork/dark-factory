@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.11.1 - 2026-11-17
+
+- To-do decision items carry one-click buttons (sdlc-kit `choices`): a choice shows its options'
+  text before ` — ` with the recommended one marked (at most 6; a recommended option past the
+  sixth takes the last place), an approval or SQL run shows `approve | hold`. A click sends the
+  label as the reply, and `option_for` now also accepts that short label. Typed replies are
+  unchanged; a kit without `choices` keeps them only.
+
 ## 0.11.0 - 2026-11-16
 
 - Lessons take an optional `class` from a closed list (`[lessons] classes`; `other` always

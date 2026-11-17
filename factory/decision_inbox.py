@@ -13,6 +13,10 @@ human's reply on that item is the decision, for every kind:
 - choice: a number (`2`, `2번`, `D12 2`), an option id or its label;
 - `hold` (also `보류`) records nothing and closes the item.
 
+The item also carries one-click choices (sdlc-kit `choices`): the options' short
+labels with the recommended one marked, or `approve | hold`. A click sends the label
+as the reply, so it takes the same path. Kits without `choices` keep the typed reply.
+
 Any other reply re-asks on the same item. The watcher (`watch`) polls every
 POLL_SECONDS while an item is open; decision-request and every factory-wake tick
 start it, and a lock keeps one per state directory. A reply is recorded through
@@ -28,7 +32,8 @@ With a `[judge]` section the watcher also keeps one pinned setting item
 `<setting_title>: on|off` with the choices `on | off`; a reply writes `state_dir/judge`.
 
 The factory never writes `human` events: it only runs add, note, wait, done, list,
-and for the setting item choices, others, pin, take and a locked retitle.
+choices on decision items, and for the setting item choices, others, pin, take and a
+locked retitle.
 """
 from __future__ import annotations
 
@@ -55,6 +60,8 @@ DECISION_ITEM = re.compile(r"^\[decision D\d+\] ")
 ALERT_TITLE = "[factory alert] "
 APPROVE = {"approve", "approved", "yes", "ok", "1", "1번", "승인"}
 HOLD = {"hold", "보류"}
+APPROVAL_CHOICES = ("approve", "hold")  # button labels; both are reply words above
+MAX_CHOICES = 6  # sdlc-kit todo core maxChoices
 POLL_SECONDS = 60
 BY = "todo"
 SETTING_TITLE = "[factory] judge"
@@ -122,6 +129,31 @@ def prompt(spec, code):
     return line(f"{head} — {action} — reply 'approve' or 'hold'")
 
 
+def short_label(option):
+    """The button text for an option: its label before " — ", without the kit's "|" separator."""
+    return option["label"].split(" — ", 1)[0].replace("|", "/").strip()
+
+
+def offer_choices(item, spec, *, todo):
+    """One-click answers on a decision item. The kit shows at most MAX_CHOICES; when the
+    recommended option would be cut off it takes the last place. Typed replies still reach
+    every option. An older kit without `choices` keeps the typed reply only."""
+    if spec["kind"] == "choice":
+        options = spec["options"][:MAX_CHOICES]
+        recommended = next((o for o in spec["options"] if o["id"] == spec.get("recommended")), None)
+        if recommended is not None and recommended not in options:
+            options[-1] = recommended
+        labels = [short_label(o) for o in options]
+        pick = next((str(n) for n, o in enumerate(options, 1) if o is recommended), None)
+    else:
+        labels, pick = APPROVAL_CHOICES, "1"
+    args = ["choices", item, " | ".join(labels)] + (["--pick", pick] if pick else [])
+    try:
+        todo(args)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as error:
+        print(f"decision-inbox: choices ignored: {error}", file=sys.stderr)
+
+
 def details(spec):
     """The evidence a decision page shows, one note line each."""
     rows = [f"Summary: {spec['summary']}"] if spec.get("summary") else []
@@ -149,6 +181,7 @@ def open_item(cfg, spec, *, todo=None):
         for row in details(spec):
             todo(["note", item, row])
         todo(["wait", item, prompt(spec, code)])
+        offer_choices(item, spec, todo=todo)
     except Exception:
         _update(cfg, spec["decision_id"], state="failed", itemDone=True, reason="todo-open-failed")
         raise
@@ -171,7 +204,7 @@ def option_for(spec, text):
     if number and 1 <= int(number[1]) <= len(options):
         return options[int(number[1]) - 1]["id"]
     for option in options:
-        if lower in (option["id"].lower(), option["label"].lower()):
+        if lower in (option["id"].lower(), option["label"].lower(), short_label(option).lower()):
             return option["id"]
     raise ValueError(f"reply with a number from 1 to {len(options)}, an option id or label, or 'hold'")
 
