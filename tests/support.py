@@ -11,6 +11,8 @@ from factory.config import Config
 ROOT = Path(__file__).resolve().parents[1]
 # A to-do decision surface must never write the real ~/.sdlc/todo.md from a test.
 os.environ["SDLC_TODO"] = str(Path(tempfile.gettempdir()) / "factory-tests-no-real-todo" / "todo.md")
+# The board feed is published only when configured; a developer's exported path must not receive test snapshots.
+os.environ.pop("SDLC_TODO_FEED", None)
 # The judge never calls a real model from a test; tests/test_judge.py clears this per test.
 os.environ["FACTORY_JUDGE_MODE"] = "off"
 

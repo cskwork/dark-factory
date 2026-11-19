@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.12.0 - 2026-11-19
+
+- Publish a schema v1 JSON snapshot for the factory board. Set `[board_feed] out` or `SDLC_TODO_FEED` to write after each guard tick and run finalization, or run `bin/factory-board-feed` for a manual refresh.
+
 ## 0.11.1 - 2026-11-17
 
 - To-do decision items carry one-click buttons (sdlc-kit `choices`): a choice shows its options'

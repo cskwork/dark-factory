@@ -14,6 +14,11 @@ launch_timeout_seconds = 60
 worker_timeout_seconds = 5500
 runbook = "templates/RUNBOOK.template.md"
 
+# Optional local board snapshot. SDLC_TODO_FEED overrides this path.
+# A relative path here is resolved alongside factory.toml.
+# [board_feed]
+# out = "~/.sdlc/todo-feed.json"
+
 [worker]
 # Tell confirm-dialog hooks that nobody is attending. Default: an empty map.
 env = { BLAST_RADIUS_UNATTENDED = "1" }

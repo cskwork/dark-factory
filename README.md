@@ -54,6 +54,16 @@ bin/factory-wake --now --key PROJ-123     # manual run, ignores the duplicate wi
 
 Schedule `bin/factory-wake` every 30 minutes with any scheduler. With Paseo, a cheap model whose only instruction is "run this one command" is enough.
 
+## Board feed
+
+Set `[board_feed] out` in `factory.toml` or export `SDLC_TODO_FEED` to publish a schema v1 JSON snapshot after each guard tick and when a run is finalized. Automatic writes require one of these settings. Write failures leave factory execution running. The next scheduled tick is `null` when its time is unknown.
+
+```bash
+bin/factory-board-feed --config factory.toml --out "$HOME/.sdlc/todo-feed.json"
+```
+
+For a manual write, `--out` takes precedence over `SDLC_TODO_FEED` and `[board_feed] out`, in that order. The manual default is `~/.sdlc/todo-feed.json`.
+
 ## Contracts you plug in
 
 - **Intake** (`intake.scan_cmd`): print `{"events":[{"key","id","author","text","mentions_me","assigned_to_me","answered_by_me_after"}],"errors":[]}`. Scope it to what the operator owns: tickets assigned to them, or comments that mention them. Also emit one `"intake":true` event per owned ticket that has not started, so backlog work does not wait for a comment; triage never classifies it. A nonzero scan exit is retried once after 3 seconds before reporting `scan-failed`. Optionally add `"queueStatuses":{"KEY":"tracker status"}` for keys already queued.
