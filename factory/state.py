@@ -3,7 +3,6 @@ import argparse
 from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
 import hashlib
 import json
 import os
@@ -11,6 +10,8 @@ from pathlib import Path
 import re
 import sys
 import tempfile
+
+from .locking import acquire, release
 
 
 BOOKKEEPING = {"deferredAt", "deferReason", "deferCount", "updatedAt", "createdAt",
@@ -57,11 +58,11 @@ def locked(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as stream:
-        fcntl.flock(stream, fcntl.LOCK_EX)
+        acquire(stream)
         try:
             yield
         finally:
-            fcntl.flock(stream, fcntl.LOCK_UN)
+            release(stream)
 
 
 def _target(directory, filename):

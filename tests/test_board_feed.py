@@ -1,6 +1,5 @@
 import contextlib
 from datetime import timedelta
-import fcntl
 import io
 import json
 import os
@@ -11,6 +10,7 @@ import time
 from unittest.mock import patch
 
 from factory import board_feed, runtime
+from factory.locking import acquire
 from support import Fixture
 
 
@@ -217,12 +217,8 @@ class BoardFeedTest(Fixture):
         snapshot = board_feed.snapshot
 
         def locked_snapshot(*args, **kwargs):
-            directory = os.open(self.out.parent, os.O_RDONLY)
-            try:
-                with self.assertRaises(BlockingIOError):
-                    fcntl.flock(directory, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            finally:
-                os.close(directory)
+            with (self.state / ".board-feed.lock").open("a") as lock, self.assertRaises(BlockingIOError):
+                acquire(lock, blocking=False)
             return snapshot(*args, **kwargs)
 
         with patch.object(board_feed, "snapshot", side_effect=locked_snapshot):
@@ -262,7 +258,7 @@ class BoardFeedTest(Fixture):
 
         def unlocked(*args, **kwargs):
             with lock_path.open("a") as stream:
-                fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquire(stream, blocking=False)
             return publish(*args, **kwargs)
 
         with patch.object(board_feed, "publish", side_effect=unlocked) as writer:
