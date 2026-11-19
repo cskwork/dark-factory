@@ -1,5 +1,6 @@
 """Guard, detached orchestrator launch, and synchronous schema-bound workers."""
 import argparse
+from contextlib import suppress
 from datetime import date
 import gzip
 import json
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import time
 import uuid
+from .board_feed import publish_if_enabled
 from .config import StateDirectoryError, load_config
 from .idle import decide, pending_focus
 from .state import append_json, locked, read_object, write_json
@@ -333,9 +335,22 @@ def reconcile_run(cfg, token, current_token):
             mark_run(cfg, token, "lost")
             return False
         mark_run(cfg, token, "ended")
-        return True
+    publish_if_enabled(cfg)
+    return True
+
 
 def guard(cfg, manual=False, release=False, token=None, force=False, force_refresh=False):
+    failed = False
+    try:
+        return _guard(cfg, manual, release, token, force, force_refresh)
+    except Exception:
+        failed = True
+        raise
+    finally:
+        publish_if_enabled(cfg, guard_failed=failed)
+
+
+def _guard(cfg, manual=False, release=False, token=None, force=False, force_refresh=False):
     cfg.state_dir.mkdir(parents=True, exist_ok=True)
     running = cfg.state_dir / "running.json"
     # Serialize duplicate-check, idle-check, and lock creation across cron processes.
@@ -427,13 +442,20 @@ def guard(cfg, manual=False, release=False, token=None, force=False, force_refre
 
 
 def release_run(cfg, run, retry=False, unlaunched=False):
+    try:
+        return _release_run(cfg, run, retry, unlaunched)
+    finally:
+        publish_if_enabled(cfg)
+
+
+def _release_run(cfg, run, retry, unlaunched):
     if unlaunched:
         with locked(cfg.state_dir / ".guard.lock"):
             if read_object(cfg.state_dir / "running.json").get("token") == run["token"]:
                 _clear_lock(cfg)
                 mark_run(cfg, run["token"], "ended")
     else:
-        guard(cfg, release=True, token=run["token"])
+        _guard(cfg, release=True, token=run["token"])
     if retry:
         with locked(cfg.state_dir / ".guard.lock"):
             last = read_object(cfg.state_dir / "last-wake.json")
@@ -739,13 +761,17 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     for name in cfg.get("launcher", {}).get("parent_env_keys", ["PASEO_AGENT_ID", "PASEO_WORKSPACE_ID"]):
         env.pop(name, None)
     started = time.time()
+    active_path = attempt / "active.json"
+    expected_key = key if key is not None else declaration["manifest"]["key"] if declaration else None
+    if expected_key:
+        with suppress(OSError):
+            write_json(active_path, {"key": expected_key, "pid": os.getpid(), "startedAt": started})
     clock_started = time.monotonic()
     stdout, stderr, code, process_error = "", "", 0, None
     process_code = None
     value, saved, gate = None, None, None
     validation_error = None
     cancellation = None
-    expected_key = key if key is not None else declaration["manifest"]["key"] if declaration else None
     def valid_result(raw):
         result = validate_worker(json.loads(raw))
         if result["key"] is not None and not cfg.valid_key(result["key"]):
@@ -826,6 +852,8 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
         if cancellation is not None:
             metadata["cancellation"] = cancellation
         write_json(attempt / "invocation.json", metadata)
+        with suppress(OSError):
+            active_path.unlink(missing_ok=True)
     if validation_error is not None:
         raise validation_error
     if process_error:
