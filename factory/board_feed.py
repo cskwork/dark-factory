@@ -3,7 +3,6 @@ import argparse
 from collections import Counter
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
-import fcntl
 from heapq import nlargest
 import json
 import os
@@ -15,6 +14,7 @@ import time
 from .config import load_config
 from .drain import epoch
 from .lessons import FIXES
+from .locking import acquire, pid_alive
 from .state import read_object, write_json
 
 
@@ -223,18 +223,6 @@ def _runs(cfg, now, owner=None):
     return [row for _, row in reversed(rows[:HISTORY_LIMIT])], today
 
 
-def _live_pid(pid):
-    if type(pid) is not int or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except PermissionError:
-        return True
-    except (OSError, OverflowError):
-        return False
-    return True
-
-
 def _owned_attempts(cfg, running, now):
     from .runtime import valid_token
 
@@ -252,7 +240,7 @@ def _owned_attempts(cfg, running, now):
             continue
         active = _object_file(path / "active.json")
         key = active.get("key")
-        if _key(cfg, key) and _recent(now, _timestamp(active.get("startedAt"))) and _live_pid(active.get("pid")):
+        if _key(cfg, key) and _recent(now, _timestamp(active.get("startedAt"))) and pid_alive(active.get("pid")):
             keys.add(key)
     return keys
 
@@ -442,14 +430,13 @@ def output_path(cfg, out=None, *, manual=False):
 def publish(cfg, out, *, guard_failed=False):
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    directory = os.open(out.parent, os.O_RDONLY)
-    try:
-        # Serialize read and replace so an earlier tick cannot overwrite a newer snapshot.
-        # The state writer uses a 0600 temporary file and atomic replace.
-        fcntl.flock(directory, fcntl.LOCK_EX)
+    # Serialize read and replace so an earlier tick cannot overwrite a newer snapshot. The lock
+    # file sits in the state directory: Windows cannot lock a directory handle.
+    # The state writer uses a 0600 temporary file and atomic replace.
+    cfg.state_dir.mkdir(parents=True, exist_ok=True)
+    with (cfg.state_dir / ".board-feed.lock").open("a") as lock:
+        acquire(lock)
         write_json(out, snapshot(cfg, guard_failed=guard_failed))
-    finally:
-        os.close(directory)
 
 
 def publish_if_enabled(cfg, *, guard_failed=False):

@@ -25,7 +25,6 @@ A model failure is an escalation: the human path runs unchanged.
 """
 import argparse
 from datetime import date, datetime, timezone
-import fcntl
 import hashlib
 import json
 import os
@@ -35,6 +34,7 @@ import sys
 
 from . import decision_page as dp
 from .config import load_config
+from .locking import acquire
 from .state import append_json, item_digest, patch, read_object, transaction, write_text
 
 MODES = ("off", "shadow", "on")
@@ -446,7 +446,7 @@ def risk(cfg, *, model=None, blocked=(), limit=2):
         return 0
     with (cfg.state_dir / ".judge.lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire(lock, blocking=False)
         except BlockingIOError:
             return 0
         queue = read_object(cfg.state_dir / "queue.json")

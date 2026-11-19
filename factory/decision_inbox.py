@@ -40,7 +40,6 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
 import hashlib
 import json
 import os
@@ -52,6 +51,7 @@ import time
 
 from . import decision_page as dp
 from .config import load_config
+from .locking import acquire
 from .state import locked, read_object, write_json
 
 SURFACES = ("app", "tui", "web", "html")
@@ -404,7 +404,7 @@ def watch(cfg, *, sleep=time.sleep, poller=None):
     pages.mkdir(parents=True, exist_ok=True)
     with (pages / ".todo-watch.lock").open("a") as handle:
         try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire(handle, blocking=False)
         except BlockingIOError:
             return 0
         while open_items(cfg) or setting_enabled(cfg):

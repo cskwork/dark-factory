@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.12.1 - 2026-11-19
+
+- Windows: `factory.runtime` (so `factory-wake`), the judge, the decision inbox and page, and the
+  board feed no longer import `fcntl` at load time. `factory.locking` takes the same exclusive
+  locks with `msvcrt.locking` on Windows and `fcntl.flock` elsewhere; a non-blocking attempt still
+  raises `BlockingIOError`. The board feed locks `state_dir/.board-feed.lock` instead of the output
+  directory, which Windows cannot lock. Board liveness checks a worker pid without `os.kill(pid, 0)`,
+  which terminates the process on Windows.
+
 ## 0.12.0 - 2026-11-19
 
 - Publish a schema v1 JSON snapshot for the factory board. Set `[board_feed] out` or `SDLC_TODO_FEED` to write after each guard tick and run finalization, or run `bin/factory-board-feed` for a manual refresh.

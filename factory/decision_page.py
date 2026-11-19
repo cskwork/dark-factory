@@ -14,7 +14,6 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
-import fcntl
 import hashlib
 import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +30,7 @@ import webbrowser
 
 from . import sql_runner
 from .config import StateDirectoryError, load_config
+from .locking import acquire, release
 
 
 class DecisionRefused(ValueError):
@@ -52,8 +52,11 @@ def _error(error):
 def _lock(path):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
-        fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
+        acquire(handle)
+        try:
+            yield
+        finally:
+            release(handle)
 
 
 def _write(path, data):
