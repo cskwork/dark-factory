@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.13.0 - unreleased
+## 0.13.0 - 2026-11-24
 
 - Record completed Paseo agent usage and Claude judge usage, and show today's measured inference usage on the board.
 - Journal queue stage transitions in `delivery.jsonl`.
