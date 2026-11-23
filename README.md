@@ -127,6 +127,39 @@ A row may carry an optional `class` from a closed list. `[lessons] classes` conf
 
 A weekly retro (template in `templates/RETRO.template.md`) groups repeats, prefers a new verifier over a new rule, and prepares a `retro/YYYYMMDD` branch with tests. Each user decision also opens through `bin/decision-request` with a recommended option; the report cites existing recurring-lesson decisions instead of duplicating them. Humans review and merge; publication requires authorization.
 
+### Inference and delivery measurements
+
+Completed Paseo workers record usage or a lookup error in the invocation receipt.
+The next wakes collect detached orchestrator receipts once the agents finish.
+Token totals count Paseo input plus output and keep cached input separately.
+A Codex zero cost with observed tokens is unknown. Other launchers report unknown
+usage. Judge verdicts include the usage reported by their Claude Code envelope.
+The board shows today's known worker and orchestrator cost, units with unknown
+cost, measured tokens, and judge cost separately. Queue updates through
+`factory.state` append stage transitions to `delivery.jsonl`.
+
+### Metric ratchets and operating flags
+
+Add `[ratchet]` to `factory.toml` to enable daily checks. The first idle or
+completed tick sets the baseline, and later eligible ticks measure and tighten
+at most once each local day. Without this section automatic checks are off.
+
+- `bin/factory-ratchet init` sets the baseline immediately.
+- `bin/factory-ratchet check [--tighten] [--json]` measures against the saved ceilings.
+  A regression exits 10, appends a lesson and appears in board health.
+  `--tighten` lowers ceilings when a measurement improves.
+- `bin/factory-ratchet status` shows the last check. `ratchets.json` keeps up to 30 checks.
+
+The default metrics are human decisions per day over 7 days, the 7-day share
+of runs with zero work units and of work units without measured usage, and the
+number of lesson signatures seen at least 3 times in 14 days. Ratios without a
+denominator stay unknown until there is data. Each `[ratchet.commands]` entry
+can collect another metric from an argv command printing one finite number.
+
+`bin/factory-flags status [--json]` shows file switches and config toggles,
+including invalid values. Optional `[models] forbidden` patterns reject matching
+role model IDs during config load and preflight.
+
 ## Context diet and memory
 
 Every unattended agent rereads the same state, so the factory keeps what it hands them small:

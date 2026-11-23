@@ -6,7 +6,7 @@ import subprocess
 import time
 
 from .check_base import CheckError, Parser
-from .config import StateDirectoryError, load_config
+from .config import ModelPolicyError, StateDirectoryError, load_config
 
 
 def _probe_order(probes, names):
@@ -118,7 +118,7 @@ def main(argv=None):
         report, code = check_environment(load_config(args.config), needs, args.fail_fast)
     except (ValueError, OSError, KeyError, TypeError) as error:
         report = {"check": "preflight", "status": "FAIL", "results": [],
-                  "error": str(error) if isinstance(error, (CheckError, StateDirectoryError)) else "invalid-config"}
+                  "error": str(error) if isinstance(error, (CheckError, StateDirectoryError, ModelPolicyError)) else "invalid-config"}
         code = 2
     print(json.dumps(report, ensure_ascii=False))
     return code

@@ -16,6 +16,7 @@ from .drain import epoch
 from .lessons import FIXES
 from .locking import acquire, pid_alive
 from .state import read_object, write_json
+from .usage import ORCHESTRATOR_RECEIPT, metric_value, unit_metric
 
 
 BOARD_TZ = timezone(timedelta(hours=9))
@@ -99,6 +100,7 @@ LESSON_KINDS = {
     "reviewer_note": "Reviewer note",
     "worker_fail": "Worker failure",
     "review_rejected": "Review rejection",
+    "ratchet_regression": "Ratchet regression",
 }
 # Export machine identifiers rather than arbitrary text. Free-form queue notes,
 # actions, prompts, source errors and logs can contain confidential content.
@@ -211,13 +213,16 @@ def _runs(cfg, now, owner=None):
             # A measured worker duration can be valid even if the wall clock moved backward.
             labels = [STAGES[name][1] for name in (unit.get("stage"), unit.get("unit"))
                       if isinstance(name, str) and name in STAGES]
-            rows.append((started, {
+            row = {
                 "key": key if _key(cfg, key) else None,
                 "label": labels[0] if labels else "Work unit",
                 "startedAt": started.isoformat(timespec="seconds"),
                 "endedAt": ended.isoformat(timespec="seconds") if ended and ended <= now else None,
                 "outcome": _outcome(unit),
-            }))
+                "costUsd": unit_metric(unit, "costUsd"),
+                "tokens": unit_metric(unit, "tokens"),
+            }
+            rows.append((started, row))
     rows.sort(key=lambda pair: pair[0], reverse=True)
     today = [row for stamp, row in rows if stamp.date() == now.date()]
     return [row for _, row in reversed(rows[:HISTORY_LIMIT])], today
@@ -333,6 +338,76 @@ def _row(label, value, level=None):
     return {"label": label, "value": value, "level": level}
 
 
+def _today(value, now):
+    stamp = _timestamp(value)
+    return stamp is not None and stamp <= now and stamp.date() == now.date()
+
+
+def _judge_cost(path, now):
+    try:
+        with path.open("rb") as stream:
+            for line in stream:
+                try:
+                    row = _object(json.loads(line))
+                except (ValueError, RecursionError):
+                    continue
+                if _today(row.get("at"), now):
+                    cost = metric_value("costUsd", _object(row.get("usage")).get("costUsd"))
+                    if cost is not None:
+                        yield cost
+    except OSError:
+        pass
+
+
+def _money(values):
+    return f"${sum(values):.6f}" if values else "Unknown"
+
+
+def _usage_health(directory, today, now):
+    costs = [row["costUsd"] for row in today]
+    tokens = [row["tokens"] for row in today]
+    for folder in _folders(directory / "runs"):
+        path = folder / ORCHESTRATOR_RECEIPT
+        if not _today(_mtime(path), now):
+            continue
+        row = _object_file(path)
+        if not _today(row.get("startedAt"), now) or row.get("usageError") in ("awaiting-agent-end", "agent-running"):
+            continue
+        costs.append(unit_metric(row, "costUsd"))
+        tokens.append(unit_metric(row, "tokens"))
+    unknown = costs.count(None)
+    measured_tokens = [count for count in tokens if count is not None]
+    return {"title": "Today's inference", "rows": [
+        _row("Known cost", _money([cost for cost in costs if cost is not None])),
+        _row("Unknown-cost units", str(unknown), "warn" if unknown else None),
+        _row("Tokens", str(sum(measured_tokens)) if measured_tokens else "Unknown"),
+        _row("Judge cost", _money(list(_judge_cost(directory / "judge.jsonl", now)))),
+    ]}
+
+
+def _ratchet_health(cfg):
+    if cfg.get("ratchet") is None:
+        return []
+    from .ratchet import FILENAME
+
+    state = _object_file(cfg.state_dir / FILENAME)
+    metrics = _object(_object(state.get("last")).get("metrics"))
+    rows = []
+    for name, metric in metrics.items():
+        label = safe_label(name.replace("_", "-")) or "project-metric"
+        metric = _object(metric)
+        status = metric.get("status")
+        value, ceiling = metric.get("value"), metric.get("ceiling")
+        if status in ("ok", "regression") and type(value) in (int, float) and type(ceiling) in (int, float):
+            text, level = f"{value:g} / {ceiling:g}", "bad" if status == "regression" else "ok"
+        elif status == "error":
+            text, level = "Measurement failed", "warn"
+        else:
+            text, level = "Unknown", None
+        rows.append(_row(label.replace("-", " ").capitalize(), text, level))
+    return [{"title": "Ratchets", "rows": rows or [_row("Status", "Uninitialized")]}]
+
+
 def _monitor(scan, tick):
     rows, alerts = [], []
     sources = [(name, source) for name, source in sorted(_object(scan.get("sources")).items())
@@ -409,6 +484,8 @@ def snapshot(cfg, *, now=None, guard_failed=False):
                 _row("Work units", str(len(today))),
                 _row("Failures", str(failures), "bad" if failures else None),
             ]},
+            _usage_health(directory, today, now),
+            *_ratchet_health(cfg),
         ],
     }
 

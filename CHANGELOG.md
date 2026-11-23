@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0 - unreleased
+
+- Record completed Paseo agent usage and Claude judge usage, and show today's measured inference usage on the board.
+- Journal queue stage transitions in `delivery.jsonl`.
+- Add opt-in daily metric ratchets, role model bans, and a read-only flag inventory.
+
 ## 0.12.1 - 2026-11-19
 
 - Windows: `factory.runtime` (so `factory-wake`), the judge, the decision inbox and page, and the

@@ -127,25 +127,79 @@ def _cap_note(directory, key, row, previous):
     row["note"] = marker + kept
 
 
+def _stage(row):
+    return row.get("stage") if isinstance(row, dict) else None
+
+
+def _finish_delivery(log, pending, queue):
+    try:
+        journal = json.loads(pending.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return
+    rows = journal["rows"]
+    if all(_stage(queue.get(row["key"])) == row["to"] for row in rows):
+        # The queue was replaced. Complete this transaction's tail if the append
+        # was interrupted, including the case where it completed before unlink.
+        payload = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
+        with log.open("a+b") as stream:
+            if stream.tell() < journal["offset"]:
+                raise ValueError("delivery log was shortened during a queue transaction")
+            stream.seek(journal["offset"])
+            existing = stream.read()
+            if not payload.startswith(existing):
+                raise ValueError("delivery log changed during a queue transaction")
+            stream.write(payload[len(existing):])
+            stream.flush()
+            os.fsync(stream.fileno())
+    pending.unlink()
+
+
 def transaction(directory, filename, callback):
-    """Apply a mutation to the latest object; failures leave the original intact."""
+    """Apply a mutation to the latest object and recover any interrupted queue journal append."""
     directory = Path(directory)
     target = _target(directory, filename)
     with locked(directory / ".state.lock"):
         data = read_object(target)
+        queue = target == _target(directory, "queue.json")
+        if queue:
+            try:
+                (directory / ".delivery-pending.json").lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                _finish_delivery(_target(directory, "delivery.jsonl"),
+                                 _target(directory, ".delivery-pending.json"), data)
         before = json.loads(json.dumps(data))
         callback(data)
-        if target == _target(directory, "queue.json"):
+        if queue:
+            rows = []
             for key, row in data.items():
-                previous = before.get(key)
-                if isinstance(row, dict) and row != previous:
+                previous = before.pop(key, None)
+                if row == previous:
+                    continue
+                old_stage, new_stage = _stage(previous), _stage(row)
+                if old_stage != new_stage:
+                    rows.append({"key": key, "from": old_stage, "to": new_stage})
+                if isinstance(row, dict):
                     _cap_note(directory, key, row, previous)
                     if not row.get("createdAt"):
                         row["createdAt"] = datetime.now(timezone.utc).isoformat()
                     if (isinstance(previous, dict) and "deferCount" in row
                             and item_digest(row) != item_digest(previous)):
                         row["deferCount"] = 0
+            rows.extend({"key": key, "from": _stage(row), "to": None}
+                        for key, row in before.items() if _stage(row) is not None)
+            if rows:
+                at = datetime.now(timezone.utc).isoformat()
+                for row in rows:
+                    row["at"] = at
+                log = _target(directory, "delivery.jsonl")
+                pending = _target(directory, ".delivery-pending.json")
+                offset = log.stat().st_size if log.exists() else 0
+                write_json(pending, {"offset": offset, "rows": rows})
         write_json(target, data)
+        if queue and rows:
+            _finish_delivery(log, pending, data)
         return data
 
 

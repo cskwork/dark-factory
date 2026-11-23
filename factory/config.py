@@ -1,4 +1,5 @@
 """One TOML configuration; commands are argv templates, never shell programs."""
+from fnmatch import fnmatchcase
 import os
 from pathlib import Path
 import re
@@ -7,8 +8,16 @@ import subprocess
 import tomllib
 
 
+RATCHET_METRICS = ("human_decisions_per_day", "no_progress_run_ratio",
+                   "repeat_lesson_signatures", "cost_unknown_ratio")
+
+
 class StateDirectoryError(ValueError):
     """Unsafe state directory supplied by configuration."""
+
+
+class ModelPolicyError(ValueError):
+    """A role selects a model forbidden by the local configuration."""
 
 
 def strings(value):
@@ -44,7 +53,7 @@ def switched_off(path):
 
 
 class Config:
-    def __init__(self, data, path):
+    def __init__(self, data, path, *, validate=True):
         self.data = data
         self.path = Path(path).expanduser().resolve()
         self.project_root = self.resolve(data.get("project_root", "."), self.path.parent)
@@ -54,6 +63,8 @@ class Config:
         self.state_dir = self.resolve(state_dir, self.project_root)
         if self.state_dir == self.state_dir.parent:
             raise StateDirectoryError("invalid state_dir: must not resolve to the filesystem root")
+        if not validate:
+            return  # Read-only inventory still validates the state path.
         re.compile(self.get("key_pattern", r"[A-Z][A-Z0-9]+-\d+"))
         for name in ("duplicate_window_seconds", "lock_stale_seconds"):
             value = self.get(name, 1500 if name.startswith("duplicate") else 10800)
@@ -112,6 +123,36 @@ class Config:
         if not isinstance(dream, dict) or any(
                 dream.get(name) is not None and not argv(dream[name]) for name in ("command_check", "command_brief")):
             raise ValueError("invalid dream settings: command_check and command_brief are shell command strings")
+
+        models = self.get("models", {})
+        if not isinstance(models, dict) or not strings(models.get("forbidden", [])):
+            raise ModelPolicyError("invalid models.forbidden: expected a list of patterns")
+        for pattern in models.get("forbidden", []):
+            roles = self.get("roles", {})
+            if not isinstance(roles, dict):
+                continue
+            self._check_models(roles, pattern, "roles")
+
+        ratchet = self.get("ratchet", {})
+        commands = ratchet.get("commands", {}) if isinstance(ratchet, dict) else None
+        if not isinstance(commands, dict) or any(
+                not isinstance(name, str) or not name.strip() or not command or not strings(command)
+                for name, command in commands.items()):
+            raise ValueError("invalid ratchet.commands: expected named argv lists")
+        if commands.keys() & set(RATCHET_METRICS):
+            raise ValueError("ratchet.commands cannot replace a built-in metric")
+
+    @classmethod
+    def _check_models(cls, roles, pattern, path):
+        for name, role in roles.items():
+            if not isinstance(role, dict):
+                continue
+            location = f"{path}.{name}"
+            model = role.get("model")
+            if isinstance(model, str) and fnmatchcase(model, pattern):
+                raise ModelPolicyError(f"{location}.model {model!r} matches forbidden pattern {pattern!r}")
+            if path == "roles" and name == "workers":
+                cls._check_models(role, pattern, location)
 
     @staticmethod
     def _validate_judge(judge):
@@ -201,7 +242,7 @@ class Config:
                               timeout=limit if timeout is None else min(timeout, limit))
 
 
-def load_config(path=None):
+def load_config(path=None, *, validate=True):
     path = Path(path or os.environ.get("FACTORY_CONFIG", "factory.toml")).expanduser().resolve()
     with path.open("rb") as stream:
-        return Config(tomllib.load(stream), path)
+        return Config(tomllib.load(stream), path, validate=validate)

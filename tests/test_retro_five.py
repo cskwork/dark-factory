@@ -270,7 +270,7 @@ class MetricsTests(Fixture):
         result = drain.summary_record(self.cfg, 'test', 'PROJ-123', 'two', 105, 120, 1)
         self.assertEqual(result['durationSeconds'], 25)
         self.assertEqual(result['wallElapsedSeconds'], 20)
-        self.assertEqual(result['metrics']['tokens'], {'value': None, 'knownSubtotal': 40, 'knownUnits': 1, 'unknownUnits': 1})
+        self.assertEqual(result['metrics']['tokens'], {'value': None, 'knownSubtotal': 40, 'knownUnits': 1, 'unknownUnits': 1, 'status': 'partial'})
         before = self.read('runs/test/summary.json')
         for bad in (-1, float('nan'), True):
             with self.assertRaises(ValueError):
