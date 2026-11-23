@@ -13,10 +13,11 @@ import sys
 import time
 import uuid
 from .board_feed import publish_if_enabled
-from .config import StateDirectoryError, load_config
+from .config import ModelPolicyError, StateDirectoryError, load_config
 from .idle import decide, pending_focus
 from .state import append_json, locked, read_object, write_json
 from .lessons import append_lesson, brief_stage, lesson_block, worker_lessons
+from .usage import collect_orchestrators, paseo_target, paseo_usage, register_orchestrator
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -342,7 +343,10 @@ def reconcile_run(cfg, token, current_token):
 def guard(cfg, manual=False, release=False, token=None, force=False, force_refresh=False):
     failed = False
     try:
-        return _guard(cfg, manual, release, token, force, force_refresh)
+        message, run = _guard(cfg, manual, release, token, force, force_refresh)
+        if release and run is not None:
+            _daily_ratchet(cfg)
+        return message, None if release else run
     except Exception:
         failed = True
         raise
@@ -382,7 +386,7 @@ def _guard(cfg, manual=False, release=False, token=None, force=False, force_refr
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
                     ended = False
                 mark_run(cfg, current["token"], "ended" if ended else "lost")
-            return "factory-guard: released", None
+            return "factory-guard: released", current or None
         now = time.time()
         if _busy(cfg, current, now):
             write_json(cfg.state_dir / "guard-last.json", {"at": now, "reasons": ["duplicate-running"], "queue": {}})
@@ -549,8 +553,22 @@ def archive_finished(cfg):
     return archived, failed
 
 
+def _daily_ratchet(cfg):
+    from .ratchet import daily
+
+    try:
+        return daily(cfg)
+    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
+        print(f"factory-ratchet: {error}", file=sys.stderr)
+        return None
+
+
 def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
     if not dry_run:
+        try:
+            collect_orchestrators(cfg)
+        except (OSError, ValueError, TypeError, KeyError) as error:
+            print(f"factory-wake: usage tracking failed: {type(error).__name__}", file=sys.stderr)
         # Restart the to-do decision watcher after a reboot; html and no open items do nothing.
         try:
             from .decision_inbox import start_watcher
@@ -572,6 +590,8 @@ def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
                     print("factory-wake: dream " + outcome)
             except Exception as error:  # noqa: BLE001 - the tick already succeeded
                 print(f"factory-wake: dream error {type(error).__name__}")
+            if _daily_ratchet(cfg) is not None:
+                publish_if_enabled(cfg)
         return 0
     try:
         runbook = cfg.resolve(cfg.get("runbook", "templates/RUNBOOK.template.md"), cfg.path.parent)
@@ -584,8 +604,9 @@ def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
                   "Decide units, delegate, inspect verifier JSON, report, and release your lock in all outcomes."
                   + lesson_block(cfg))
         launch_env = cfg.launch_env()
-        command = (launcher(cfg, "orchestrator", token=run["token"]) + cfg.env_flags(launch_env)
-                   + ["--no-wait", "--title", "Factory orchestrator", "-q", prompt])
+        command = launcher(cfg, "orchestrator", token=run["token"])
+        target = paseo_target(command, token=run["token"])
+        command += cfg.env_flags(launch_env) + ["--no-wait", "--title", "Factory orchestrator", "-q", prompt]
         if dry_run:
             print("dry-run: " + shlex.join(command))
             release_run(cfg, run, retry=True, unlaunched=True)
@@ -616,6 +637,11 @@ def wake(cfg, manual=False, key=None, dry_run=False, force_refresh=False):
             # The detached runner is already alive. Unlocking would permit overlap.
             print("factory-wake: launched but logging failed; lock retained")
             return 1
+        try:
+            register_orchestrator(cfg, run["token"], run["started_at"], target,
+                                  cfg.get("roles")["orchestrator"]["provider"])
+        except OSError as error:
+            print(f"factory-wake: usage tracking failed: {type(error).__name__}", file=sys.stderr)
         print("orchestrator=" + response.stdout.strip())
         return 0
     except (OSError, ValueError, KeyError, subprocess.SubprocessError):
@@ -687,7 +713,8 @@ def cancel_worker(cfg, attempt, token=None, key=None):
             "summary": "; ".join(messages)}
 
 
-def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="unit", requirements=None):
+def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="unit", requirements=None,
+           *, usage_runner=None):
     if role not in cfg.get("roles", {}).get("workers", {}):
         raise ValueError("unknown worker role")
     if key and not cfg.valid_key(key):
@@ -716,6 +743,7 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
     text = Path(brief).read_text()
     attempt_id = uuid.uuid4().hex
     command = launcher(cfg, role, token=token, key=key, attempt=attempt_id)
+    target = paseo_target(command, attempt=attempt_id)
     # [launch] env (every agent; off with state_dir/min-env), then [worker] env, which wins on a clash.
     worker_env = {**cfg.launch_env(), **cfg.get("worker", {}).get("env", {})}
     command += cfg.env_flags(worker_env)
@@ -837,18 +865,26 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
             cancellation = cancel_worker(cfg, attempt_id, token=token, key=key)
             write_json(attempt / "cancellation.json", cancellation)
         ended = time.time()
+        elapsed = time.monotonic() - clock_started
         mapping = cfg.get("roles", {}).get("workers", {}).get(role, {})
+        usage, usage_error = paseo_usage(cfg, target, mapping["provider"], runner=usage_runner, env=env)
+        if usage_error == "empty-last-usage":
+            time.sleep(3)
+            usage, usage_error = paseo_usage(cfg, target, mapping["provider"], runner=usage_runner, env=env)
+        observations = {name: {"value": usage[name], "source": usage["source"]} for name in ("tokens", "costUsd")
+                        if usage is not None and usage[name] is not None}
         metadata = {"attemptId": attempt_id, "key": key, "unit": unit, "role": role,
                     "token": token, "startedAt": started, "endedAt": ended,
-                    "durationSeconds": time.monotonic() - clock_started,
+                    "durationSeconds": elapsed,
                     "exitCode": code, "processExitCode": process_code,
                     "resultStatus": (value or saved or {}).get("status"),
                     "outcome": process_error or ("success" if value and value["status"] == "done" else (value or {}).get("status", "unknown")),
                     "source": "factory-worker",
                     "provider": mapping.get("provider"), "model": mapping.get("model"),
                     "stage": (value or saved or {}).get("stage"),
-                    "observations": {}, "metrics": {name: None for name in
-                    ("tokens", "costUsd", "waitSeconds", "humanInterventions", "reworkCount")}}
+                    "usage": usage, "usageError": usage_error, "observations": observations,
+                    "metrics": {name: observations.get(name, {}).get("value") for name in
+                                ("tokens", "costUsd", "waitSeconds", "humanInterventions", "reworkCount")}}
         if cancellation is not None:
             metadata["cancellation"] = cancellation
         write_json(attempt / "invocation.json", metadata)
@@ -920,7 +956,7 @@ def main(argv=None):
         if len(args.args) not in (3, 4):
             parser.error("worker requires ROLE TITLE BRIEF [TIMEOUT]")
         return worker(cfg, *args.args, token=args.token, key=args.key, unit=args.unit, requirements=args.requirements)
-    except StateDirectoryError as error:
+    except (ModelPolicyError, StateDirectoryError) as error:
         print(json.dumps({"error": str(error)}))
         return 1 if args.kind == "guard" and args.owns is not None else 2
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):

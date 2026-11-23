@@ -306,6 +306,9 @@ keys in the latest object, and replace through a temporary file. Workers and
 orchestrators use `python3 -m factory.state --config CONFIG patch FILE --path
 '["KEY"]' --json '{"stage":"build","waiting":null}'`; include `--delete
 '["FIELD"]'` to remove fields. Queue creation supplies createdAt automatically.
+Changes to `stage` through the writer append `{key, from, to, at}` under the same
+lock to `delivery.jsonl`. An absent stage is recorded as null, including on
+initial assignment and removal.
 This convention cannot prevent an arbitrary agent from bypassing the command;
 validate queue JSON and required fields after every unit, recording infra_fail
 on corruption. Journal/lessons writes are one append-only line, never rewrites.
@@ -627,7 +630,8 @@ this gate before their declared transition. The wrapper and drain gate verify
 saved caller-declared evidence; they do not run or authenticate remote verifiers.
 
 Each actual wrapper attempt writes invocation.json with observed start/end,
-duration, exit/outcome, role/provider/model, source=factory-worker and unknown
+duration, exit/outcome, role/provider/model and source=factory-worker. A Paseo
+receipt has observed usage or a usageError. Other launchers record unknown
 usage. Feed each attempt, including failures, once into the existing summary:
 
 ```sh
@@ -647,7 +651,9 @@ Legacy summary-record flags continue to work, with optional --stage and
 --observations. --invocation supplies key/unit/timing/workers/stage, preserving
 attempt provenance and outcome; do not also supply those identity flags.
 Summary recomputation is idempotent by key/unit/startedAt. Each metric gives
-knownSubtotal, knownUnits, unknownUnits; value is null until every unit is known.
+knownSubtotal, knownUnits, unknownUnits and status (known, partial, or unknown).
+The value is null until every unit is known. Invocation observations are included
+automatically. Explicit observations take precedence for the metrics they name.
 Unit records retain observation sources. durationSeconds sums unit time:
 --invocation preserves the wrapper's finite, nonnegative monotonic measurement,
 marked durationSource=factory-worker-monotonic; legacy explicit timestamps

@@ -36,6 +36,7 @@ from . import decision_page as dp
 from .config import load_config
 from .locking import acquire
 from .state import append_json, item_digest, patch, read_object, transaction, write_text
+from .usage import judge_usage
 
 MODES = ("off", "shadow", "on")
 APPROVED, FAILED, ESCALATE, WAITING = 0, 1, 10, 11
@@ -112,7 +113,7 @@ def set_mode(cfg, value):
 
 
 def log(cfg, row):
-    append_json(cfg.state_dir / "judge.jsonl", {"at": _now().isoformat(), **row})
+    append_json(cfg.state_dir / "judge.jsonl", {"at": _now().isoformat(), "usage": None, **row})
 
 
 def _escalation(reason):
@@ -123,6 +124,7 @@ def _escalation(reason):
 def ask(cfg, data, *, runner=subprocess.run):
     """One model verdict. Accepts raw verdict JSON or an envelope with structured_output; failure escalates."""
     rules = RULES.replace("{min_confidence}", str(settings(cfg).get("min_confidence", 0.8)))
+    usage = None
     try:
         command = cfg.command(settings(cfg)["command"], schema=json.dumps(VERDICT))
         extra = {}
@@ -134,15 +136,21 @@ def ask(cfg, data, *, runner=subprocess.run):
         proc = runner(command, input=rules + json.dumps(data, ensure_ascii=False), capture_output=True,
                       text=True, timeout=settings(cfg).get("timeout_seconds", 900), cwd=cfg.project_root, **extra)
         out = json.loads(proc.stdout)
+        if isinstance(out, dict):
+            usage = judge_usage(out)
         if isinstance(out, dict) and "structured_output" in out:
             if out.get("is_error"):
                 raise ValueError("model reported an error")
             out = out["structured_output"]
         if proc.returncode or not isinstance(out, dict) or not set(VERDICT["required"]) <= set(out):
             raise ValueError("no verdict")
-        return out
+        verdict = dict(out)
+        verdict.pop("usage", None)
     except (subprocess.SubprocessError, ValueError, OSError, KeyError, TypeError) as error:
-        return _escalation("judge-failed:" + type(error).__name__)
+        verdict = _escalation("judge-failed:" + type(error).__name__)
+    if usage is not None:
+        verdict["usage"] = usage
+    return verdict
 
 
 def accepted(cfg, verdict, options):

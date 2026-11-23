@@ -31,6 +31,12 @@ env = { BLAST_RADIUS_UNATTENDED = "1" }
 [launch]
 env = { CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1" }
 
+# Optional metric ratchets. An empty [ratchet] enables the built-in metrics.
+# The first idle or completed tick sets a baseline. Later ticks check once a day.
+# [ratchet]
+# [ratchet.commands]
+# open_incidents = ["python3", "adapters/count_open_incidents.py"]
+
 [lessons]
 escalate_count = 3
 window_days = 14
@@ -110,6 +116,10 @@ idle = "idle"
 closed = "closed"
 finished = "closed"
 completed = "closed"
+
+# Optional model policy. Patterns are case-sensitive fnmatch patterns for role model IDs.
+# [models]
+# forbidden = ["claude-fable-*"]
 
 [roles.waker]
 provider = "codex"

@@ -204,7 +204,8 @@ def aggregate_summary(value):
         unknown = len(units) - len(observed)
         value["metrics"][name] = {"value": sum(observed) if observed and not unknown else None,
                                   "knownSubtotal": sum(observed) if observed else None,
-                                  "knownUnits": len(observed), "unknownUnits": unknown}
+                                  "knownUnits": len(observed), "unknownUnits": unknown,
+                                  "status": ("partial" if unknown else "known") if observed else "unknown"}
     for row in units:
         stage = row.get("stage") or "unknown"
         group = value["stages"].setdefault(stage, {"units": 0, "workers": 0, "durationSeconds": 0})
@@ -245,7 +246,8 @@ def summary_init(cfg, token, runnable, lane_eligible, now=None):
         return transaction(cfg.state_dir, run_filename(token, "summary.json"), change)
 
 
-def summary_record(cfg, token, key, unit, started, ended, workers, runtime=False, observations=None, stage=None, invocation=None, measured_duration=None):
+def summary_record(cfg, token, key, unit, started, ended, workers, runtime=False, observations=None,
+                   stage=None, invocation=None, measured_duration=None, *, usage=None, usage_error=None):
     started, ended = epoch(started), epoch(ended)
     if measured_duration is not None and (invocation is None or type(measured_duration) not in (int, float)
                                           or not math.isfinite(measured_duration) or measured_duration < 0):
@@ -261,6 +263,8 @@ def summary_record(cfg, token, key, unit, started, ended, workers, runtime=False
                   durationSeconds=ended - started if measured_duration is None else measured_duration, workers=workers, runtime=runtime)
     if observations:
         record["observations"] = observations
+    if usage is not None or usage_error is not None:
+        record.update(usage=usage, usageError=usage_error)
     if stage is not None:
         record["stage"] = stage
     if invocation is not None:
@@ -420,12 +424,15 @@ def main(argv=None):
                 if any(v is not None for v in (args.key, args.unit, args.started_at, args.ended_at, args.workers, args.stage)):
                     raise ValueError("invocation supplies identity and timing")
                 invocation = invocation_record(args.invocation, token)
+                observations = {**validate_observations(invocation.get("observations")),
+                                **validate_observations(observations)}
                 result = summary_record(cfg, token, invocation.get("key"), invocation["unit"],
                                         invocation["startedAt"], invocation["endedAt"], 1, args.runtime,
                                         observations, invocation.get("stage"),
                                         {"path": str(args.invocation.resolve()), "attemptId": invocation["attemptId"],
                                          "outcome": invocation["outcome"], "exitCode": invocation["exitCode"],
-                                         "source": "factory-worker"}, measured_duration=invocation["durationSeconds"])
+                                         "source": "factory-worker"}, measured_duration=invocation["durationSeconds"],
+                                        usage=invocation.get("usage"), usage_error=invocation.get("usageError"))
             else:
                 result = summary_record(cfg, token, args.key, args.unit, args.started_at,
                                         args.ended_at, args.workers, args.runtime, observations, args.stage)
