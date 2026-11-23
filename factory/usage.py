@@ -5,11 +5,14 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
+import time
 
 from .state import locked, read_object, write_json
 
 PROBE_TIMEOUT = 3
 PROBES_PER_TICK = 3
+ORCHESTRATOR_RETRY_SECONDS = 24 * 60 * 60
 ORCHESTRATOR_RECEIPT = "orchestrator-usage.json"
 
 
@@ -148,33 +151,84 @@ def register_orchestrator(cfg, token, started, target, provider):
                    {**record, "target": target, "provider": provider})
 
 
-def collect_orchestrators(cfg, *, runner=None):
+def _collect_orchestrator(cfg, path, current, now, runner, env):
+    from .drain import epoch
+    from .runtime import launcher
+
+    receipt = cfg.state_dir / "runs" / path.stem / ORCHESTRATOR_RECEIPT
+    started_at = None
+    try:
+        data = read_object(path)
+        started = epoch(data["startedAt"])
+        started_at = data["startedAt"]
+        saved_target, provider = data["target"], data["provider"]
+        if (not isinstance(saved_target, dict) or not isinstance(saved_target.get("executable"), str)
+                or not isinstance(saved_target.get("selectors"), dict)
+                or not isinstance(saved_target.get("connection"), list)
+                or not isinstance(provider, str) or not provider):
+            raise ValueError("invalid pending usage target or provider")
+    except (ValueError, TypeError, KeyError, OverflowError, RecursionError) as failure:
+        quarantine = path.with_suffix(".json.corrupt")
+        path.rename(quarantine)
+        error = f"corrupt-pending-usage: {failure}"
+        print(f"{quarantine.name}: {error}", file=sys.stderr)
+        if started_at is None:
+            try:
+                started_at = read_object(receipt).get("startedAt")
+            except (OSError, ValueError, RecursionError) as read_error:
+                print(f"{receipt}: could not recover startedAt: {read_error}", file=sys.stderr)
+        write_json(receipt, {"startedAt": started_at, "usage": None, "usageError": error})
+        return
+
+    if now - started >= ORCHESTRATOR_RETRY_SECONDS:
+        previous = read_object(receipt)
+        if previous.get("usage") is None:
+            error = previous.get("usageError")
+            if error is None or error == "awaiting-agent-end":
+                error = "usage-probe-expired"
+            write_json(receipt, {"startedAt": started_at, "usage": None, "usageError": error})
+        path.unlink()
+        return
+
+    # Resolve the executable and connection from trusted configuration. The pending
+    # receipt is evidence of which configuration was used when the agent launched.
+    try:
+        target = paseo_target(launcher(cfg, "orchestrator", token=path.stem), token=path.stem)
+    except (ValueError, TypeError, KeyError) as failure:
+        measured, error = None, "invalid-usage-target: " + type(failure).__name__
+    else:
+        if target != saved_target:
+            measured, error = None, "usage-target-changed"
+        else:
+            measured, error = paseo_usage(cfg, target, provider, runner=runner, env=env)
+    write_json(receipt, {"startedAt": started_at, "usage": measured, "usageError": error})
+    if error and (error in ("agent-running", "empty-last-usage")
+                  or error.startswith(("paseo-usage-", "paseo-usage: ls exit ", "paseo-usage: agent exit "))
+                  or path.stem == current and error == "agent-not-found"):
+        path.touch()  # Give other waiting receipts a turn.
+    else:
+        path.unlink()
+
+
+def collect_orchestrators(cfg, *, runner=None, now=None):
     """A release runs inside the agent. Later wakes sample detached agents after the turn ends."""
     directory = cfg.state_dir / "pending-orchestrator-usage"
     if not directory.is_dir():
         return
-    from .runtime import launcher
-
+    now = time.time() if now is None else now
     env = {**os.environ, **cfg.launch_env()}
     with locked(cfg.state_dir / ".orchestrator-usage.lock"):
         current = read_object(cfg.state_dir / "running.json").get("token")
-        pending = (path for path in directory.glob("*.json") if re.fullmatch(r"[0-9a-f]{32}", path.stem))
-        for path in sorted(pending, key=lambda candidate: candidate.stat().st_mtime)[:PROBES_PER_TICK]:
-            data = read_object(path)
-            # Resolve executable and connection from the trusted configuration; the
-            # pending receipt is only evidence of which configuration was used.
+        pending = []
+        for path in directory.glob("*.json"):
+            if not re.fullmatch(r"[0-9a-f]{32}", path.stem):
+                continue
             try:
-                target = paseo_target(launcher(cfg, "orchestrator", token=path.stem), token=path.stem)
-            except (ValueError, TypeError, KeyError) as failure:
-                usage, error = None, "invalid-usage-target: " + type(failure).__name__
-            else:
-                if target != data["target"]:
-                    usage, error = None, "usage-target-changed"
-                else:
-                    usage, error = paseo_usage(cfg, target, data["provider"], runner=runner, env=env)
-            write_json(cfg.state_dir / "runs" / path.stem / ORCHESTRATOR_RECEIPT,
-                       {"startedAt": data["startedAt"], "usage": usage, "usageError": error})
-            if error == "agent-running" or path.stem == current and error in ("agent-not-found", "empty-last-usage"):
-                path.touch()  # Give other waiting receipts a turn.
-            else:
-                path.unlink()
+                pending.append((path.stat().st_mtime, path))
+            except OSError as failure:
+                print(f"{path.name}: usage tracking failed: {failure}", file=sys.stderr)
+        for _, path in sorted(pending)[:PROBES_PER_TICK]:
+            try:
+                _collect_orchestrator(cfg, path, current, now, runner, env)
+            except (OSError, ValueError, TypeError, RecursionError) as failure:
+                print(f"{path.name}: usage tracking failed: {failure}", file=sys.stderr)

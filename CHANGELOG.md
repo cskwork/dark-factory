@@ -5,6 +5,10 @@
 - Record completed Paseo agent usage and Claude judge usage, and show today's measured inference usage on the board.
 - Journal queue stage transitions in `delivery.jsonl`.
 - Add opt-in daily metric ratchets, role model bans, and a read-only flag inventory.
+- Tighten ratchets using the maximum of seven daily samples, with at least five observations per ratio sample. Manual checks leave the daily run available, regression lessons are written once per episode and excluded from repeat counts, and `factory-ratchet reset <metric>` re-baselines one metric.
+- Preserve successful queue writes when the delivery append fails. Retry pending appends on the next queue write and quarantine records that conflict with the log.
+- Reject forbidden model IDs supplied through `--model` in judge and launcher commands. The scan covers configured role models and these command arguments.
+- Retry empty Paseo usage once after three seconds for workers. Retry empty or temporarily unavailable orchestrator usage on later wakes for up to 24 hours, then retain the last error. Quarantine corrupt pending receipts so collection can continue.
 
 ## 0.12.1 - 2026-11-19
 

@@ -17,6 +17,8 @@ FILENAME = "ratchets.json"
 COMMAND_TIMEOUT = 10
 HISTORY_LIMIT = 30
 DAY_SECONDS = 86400
+TIGHTEN_DAYS = 7
+MIN_RATIO_DENOMINATOR = 5
 
 
 def _recent(stamp, now, days):
@@ -49,6 +51,7 @@ def _human_decisions(directory, now):
 def _repeated_lessons(directory, now):
     counts = Counter(signature(row) for row in _events(directory / "lessons.jsonl", now, 14)
                      if isinstance(row.get("kind"), str)
+                     and row["kind"] != "ratchet_regression"
                      and isinstance(row.get("what", row.get("observation")), str))
     return sum(count >= 3 for count in counts.values())
 
@@ -79,23 +82,32 @@ def _run_metrics(cfg, now):
             if _recent(unit.get("startedAt", started), now, 7):
                 units += 1
                 missing += all(unit_metric(unit, name) is None for name in ("tokens", "costUsd"))
-    return {"no_progress_run_ratio": empty / runs if runs else None,
-            "cost_unknown_ratio": missing / units if units else None}
+    return {"no_progress_run_ratio": (empty, runs), "cost_unknown_ratio": (missing, units)}
 
 
-def _measure(cfg, now):
-    values, errors = {}, {}
+def _measure(cfg, now, only=None):
+    values, denominators, errors = {}, {}, {}
     readers = [
         (("human_decisions_per_day",), lambda: {"human_decisions_per_day": _human_decisions(cfg.state_dir, now)}),
         (("repeat_lesson_signatures",), lambda: {"repeat_lesson_signatures": _repeated_lessons(cfg.state_dir, now)}),
         (("no_progress_run_ratio", "cost_unknown_ratio"), lambda: _run_metrics(cfg, now)),
     ]
     for names, read in readers:
+        if only is not None and only not in names:
+            continue
         try:
-            values.update(read())
+            for name, measured in read().items():
+                if isinstance(measured, tuple):
+                    numerator, denominator = measured
+                    denominators[name] = denominator
+                    values[name] = numerator / denominator if denominator else None
+                else:
+                    values[name] = measured
         except (OSError, ValueError, TypeError, KeyError, RecursionError) as error:
             errors.update(dict.fromkeys(names, str(error)))
     for name, command in cfg.get("ratchet", {}).get("commands", {}).items():
+        if only is not None and name != only:
+            continue
         try:
             result = cfg.run(command, timeout=COMMAND_TIMEOUT)
             if result.returncode:
@@ -108,46 +120,100 @@ def _measure(cfg, now):
             errors[name] = "command timeout"
         except (OSError, ValueError, KeyError, subprocess.SubprocessError) as error:
             errors[name] = str(error)
-    return values, errors
+    return values, denominators, errors
 
 
-def _evaluate(cfg, state, now, *, initialize, tighten):
+def _candidate(samples, name):
+    rows = [sample.get(name, {}) for sample in samples]
+    if len(rows) < TIGHTEN_DAYS or any(row.get("value") is None for row in rows):
+        return None
+    if any(row.get("denominator", MIN_RATIO_DENOMINATOR) < MIN_RATIO_DENOMINATOR for row in rows):
+        return None
+    return max(row["value"] for row in rows)
+
+
+def _record(state, now, metrics):
     stamp = now.isoformat()
-    values, errors = _measure(cfg, now.timestamp())
+    statuses = {row["status"] for row in metrics.values()}
+    status = next(status for status in ("regression", "error", "unknown", "ok") if status in statuses)
+    report = {"at": stamp, "day": now.date().isoformat(), "metrics": metrics, "status": status}
+    state.update(setAt=state.get("setAt", stamp), updatedAt=stamp,
+                 last=report, history=[*state.get("history", []), report][-HISTORY_LIMIT:])
+    return report
+
+
+def _evaluate(cfg, state, now, names, *, initialize, tighten, automatic):
+    values, denominators, errors = _measure(cfg, now.timestamp())
     ceiling, baseline = state.get("ceiling", {}), state.get("baseline", {})
-    report = {"at": stamp, "day": now.date().isoformat(), "metrics": {}}
-    names = (*RATCHET_METRICS, *cfg.get("ratchet", {}).get("commands", {}))
+    samples = state.get("dailyHistory", [])
+    sample = {name: {"value": value} for name, value in values.items() if name not in errors}
+    for name, denominator in denominators.items():
+        if name in sample:
+            sample[name]["denominator"] = denominator
+    if automatic:
+        samples = [*samples, sample][-TIGHTEN_DAYS:]
+        state.update(lastDaily=now.date().isoformat(), dailyHistory=samples)
+    metrics = {}
     for name in names:
         value = values.get(name)
         limit = ceiling.setdefault(name, None)
         baseline.setdefault(name, None)
-        status = "ok"
+        row = dict(sample.get(name, {"value": value}))
         if name in errors:
             status = "error"
-        elif value is None or limit is None and not (tighten or initialize):
-            status = "unknown"
-        elif limit is not None and value > limit:
-            status = "regression"
-        elif initialize or tighten and (limit is None or value < limit):
-            ceiling[name] = value
-            if baseline[name] is None:
-                baseline[name] = value
-        row = {"value": value, "ceiling": ceiling[name], "status": status}
-        if name in errors:
             row["error"] = errors[name]
-        report["metrics"][name] = row
-    statuses = {row["status"] for row in report["metrics"].values()}
-    report["status"] = next(status for status in ("regression", "error", "unknown", "ok") if status in statuses)
-    state.update(ceiling=ceiling, baseline=baseline, setAt=state.get("setAt", stamp),
-                 updatedAt=stamp, last=report, history=[*state.get("history", []), report][-HISTORY_LIMIT:])
-    return report
+        elif value is None:
+            status = "unknown"
+        else:
+            if limit is None and (initialize or tighten):
+                if denominators.get(name, MIN_RATIO_DENOMINATOR) >= MIN_RATIO_DENOMINATOR:
+                    ceiling[name] = baseline[name] = value
+            elif tighten and limit is not None:
+                candidate = _candidate(samples, name)
+                if candidate is not None and value <= candidate and 0 <= candidate < limit:
+                    ceiling[name] = candidate
+            limit = ceiling[name]
+            status = "unknown" if limit is None else "regression" if value > limit else "ok"
+        metrics[name] = {**row, "ceiling": ceiling[name], "status": status}
+    state.update(ceiling=ceiling, baseline=baseline)
+    return _record(state, now, metrics)
 
 
-def _run(cfg, *, now, initialize=False, tighten=False, automatic=False):
+def _regressed(state):
+    if "regressed" in state:
+        return set(state["regressed"])
+    # Legacy reports lack episode state. An unknown or failed probe does not establish recovery.
+    known = {}
+    for report in [*state.get("history", []), state.get("last", {})]:
+        known.update((name, row["status"]) for name, row in report.get("metrics", {}).items()
+                     if row["status"] in ("regression", "ok"))
+    return {name for name, status in known.items() if status == "regression"}
+
+
+def _reset(cfg, state, now, name):
+    values, denominators, errors = _measure(cfg, now.timestamp(), only=name)
+    value = values.get(name)
+    if value is None or name in errors:
+        raise ValueError(f"cannot reset {name}: {errors.get(name, 'no measurement')}")
+    state["baseline"][name] = state["ceiling"][name] = value
+    state["regressed"] = sorted(_regressed(state) - {name})
+    for sample in state.get("dailyHistory", []):
+        sample.pop(name, None)
+    row = {"value": value, "ceiling": value, "status": "ok"}
+    if name in denominators:
+        row["denominator"] = denominators[name]
+    report = _record(state, now, {**state.get("last", {}).get("metrics", {}), name: row})
+    return {**report, "metrics": {name: row}, "status": "ok"}
+
+
+def _run(cfg, *, now, initialize=False, tighten=False, automatic=False, reset=None):
     if cfg.get("ratchet") is None:
         if automatic:
             return None
         raise ValueError("ratchet is disabled; add a [ratchet] section")
+    names = (*RATCHET_METRICS, *cfg.get("ratchet", {}).get("commands", {}))
+    if reset is not None and reset not in names:
+        raise ValueError(f"unknown metric: {reset}")
     now = datetime.now().astimezone() if now is None else now
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
@@ -158,16 +224,25 @@ def _run(cfg, *, now, initialize=False, tighten=False, automatic=False):
             raise ValueError("ratchets already initialized")
         if not state and not (initialize or automatic):
             raise ValueError("run factory-ratchet init first")
-        if automatic and state.get("last", {}).get("day") == now.date().isoformat():
+        if automatic and state.get("lastDaily", "") >= now.date().isoformat():
             return None
-        report = _evaluate(cfg, state, now, initialize=initialize or not state, tighten=tighten)
+        if reset is not None:
+            report = _reset(cfg, state, now, reset)
+            write_json(path, state)
+            return report
+        regressed = _regressed(state)
+        report = _evaluate(cfg, state, now, names, initialize=initialize or not state,
+                           tighten=tighten, automatic=automatic)
+        regressions = {name for name, row in report["metrics"].items() if row["status"] == "regression"}
+        recovered = {name for name, row in report["metrics"].items() if row["status"] == "ok"}
+        state["regressed"] = sorted((regressed | regressions) - recovered)
         write_json(path, state)
         lesson_errors = {}
-        for name, row in report["metrics"].items():
-            if row["status"] != "regression":
-                continue
+        for name in sorted(regressions - regressed):
+            row = report["metrics"][name]
             try:
-                append_lesson(cfg, {"kind": "ratchet_regression", "what": f"Ratchet regression: {name}",
+                append_lesson(cfg, {"kind": "ratchet_regression", "class": "other",
+                                    "what": f"Ratchet regression: {name}",
                                     "metric": name, "value": row["value"], "ceiling": row["ceiling"]}, now=now)
             except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as error:
                 lesson_errors[name] = str(error)
@@ -199,6 +274,8 @@ def main(argv=None):
     check = commands.add_parser("check", parents=[common])
     check.add_argument("--tighten", action="store_true")
     check.add_argument("--json", action="store_true")
+    reset = commands.add_parser("reset", parents=[common])
+    reset.add_argument("metric")
     commands.add_parser("status", parents=[common])
     args = parser.parse_args(argv)
     try:
@@ -212,7 +289,8 @@ def main(argv=None):
             elif cfg.get("ratchet") is not None:
                 print("ratchet: uninitialized")
             return 0
-        report = _run(cfg, now=None, initialize=args.command == "init", tighten=getattr(args, "tighten", False))
+        report = _run(cfg, now=None, initialize=args.command == "init", tighten=getattr(args, "tighten", False),
+                      reset=getattr(args, "metric", None))
         if getattr(args, "json", False):
             print(json.dumps(report))
         else:

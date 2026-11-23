@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
 import io
 import json
@@ -48,14 +48,61 @@ class DeliveryLogTests(Fixture):
     def test_retry_repairs_partial_append_without_a_duplicate(self):
         key = "PROJ-123"
         state.patch(self.state, "queue.json", [key], {"stage": "intake"})
-        with patch("factory.state._finish_delivery", side_effect=OSError("interrupted")):
-            with self.assertRaises(OSError):
-                state.patch(self.state, "queue.json", [key], {"stage": "build"})
+        with patch("factory.state._finish_delivery", side_effect=OSError("interrupted")), \
+                redirect_stderr(io.StringIO()) as output:
+            queue = state.patch(self.state, "queue.json", [key], {"stage": "build"})
+        self.assertEqual(queue[key]["stage"], "build")
+        self.assertEqual(self.read("queue.json"), queue)
+        self.assertIn("queue committed; delivery append pending: interrupted", output.getvalue())
         pending = self.read(".delivery-pending.json")["rows"][0]
         with (self.state / "delivery.jsonl").open("a") as log:
             log.write(json.dumps(pending)[:16])
         state.patch(self.state, "queue.json", [key], {"stage": "build"})
         self.assertEqual([row["to"] for row in self.rows()], ["intake", "build"])
+        self.assertFalse((self.state / ".delivery-pending.json").exists())
+
+    def test_recovery_quarantines_log_conflict_and_continues_queue_writes(self):
+        key = "PROJ-123"
+        for mismatch in ("shortened", "changed"):
+            with self.subTest(mismatch=mismatch):
+                directory = self.state / mismatch
+                state.patch(directory, "queue.json", [key], {"stage": "intake"})
+                with patch("factory.state._finish_delivery", side_effect=OSError("interrupted")), \
+                        redirect_stderr(io.StringIO()):
+                    state.patch(directory, "queue.json", [key], {"stage": "build"})
+                pending = state.read_object(directory / ".delivery-pending.json")
+                log = directory / "delivery.jsonl"
+                if mismatch == "shortened":
+                    log.rename(directory / "delivery.jsonl.1")
+                else:
+                    with log.open("a") as stream:
+                        stream.write('{"unrelated": true}\n')
+                with redirect_stderr(io.StringIO()) as output:
+                    queue = state.patch(directory, "queue.json", [key], {"stage": "review"})
+                conflict, = directory.glob(".delivery-pending.conflict-*.json")
+                self.assertEqual(state.read_object(conflict), pending)
+                self.assertIn(mismatch, output.getvalue())
+                self.assertEqual(queue[key]["stage"], "review")
+                self.assertEqual(json.loads(log.read_text().splitlines()[-1])["from"], "build")
+                self.assertFalse((directory / ".delivery-pending.json").exists())
+
+    def test_recovery_discards_pending_when_queue_write_failed(self):
+        key = "PROJ-123"
+        state.patch(self.state, "queue.json", [key], {"stage": "intake"})
+        write_json = state.write_json
+
+        def fail_queue_write(path, value):
+            if path.name == "queue.json":
+                raise OSError("queue replace failed")
+            write_json(path, value)
+
+        with patch("factory.state.write_json", side_effect=fail_queue_write):
+            with self.assertRaisesRegex(OSError, "queue replace failed"):
+                state.patch(self.state, "queue.json", [key], {"stage": "build"})
+        self.assertEqual(self.read(".delivery-pending.json")["rows"][0]["to"], "build")
+        self.assertEqual(self.read("queue.json")[key]["stage"], "intake")
+        state.patch(self.state, "queue.json", [key], {"waiting": "reporter"})
+        self.assertEqual([row["to"] for row in self.rows()], ["intake"])
         self.assertFalse((self.state / ".delivery-pending.json").exists())
 
 
@@ -88,6 +135,8 @@ class RatchetTests(Fixture):
         self.assertEqual({name: row["value"] for name, row in result["metrics"].items()},
                          {"human_decisions_per_day": 1 / 7, "no_progress_run_ratio": 0.5,
                           "repeat_lesson_signatures": 1, "cost_unknown_ratio": 0.5})
+        self.assertEqual(result["metrics"]["no_progress_run_ratio"]["denominator"], 2)
+        self.assertEqual(result["metrics"]["cost_unknown_ratio"]["denominator"], 2)
 
     def test_daily_tightens_only_down_and_regressions_reach_lesson_and_board(self):
         self.data["ratchet"]["commands"] = {"open_incidents": ["metric"]}
@@ -101,20 +150,72 @@ class RatchetTests(Fixture):
         with patch.object(self.cfg, "run", side_effect=metric) as runner:
             self.assertIsNotNone(ratchet.daily(self.cfg, self.now))
             self.assertIsNone(ratchet.daily(self.cfg, self.now + timedelta(hours=1)))
-            observed = 2
-            ratchet.daily(self.cfg, self.now + timedelta(days=1))
-            observed = 3
-            result = ratchet.daily(self.cfg, self.now + timedelta(days=2))
-            self.assertEqual(runner.call_count, 3)
+            for day, observed in enumerate([2, 3, 2, 2, 2, 2, 2], 1):
+                report = ratchet.daily(self.cfg, self.now + timedelta(days=day))
+                self.assertEqual(report["metrics"]["open_incidents"]["ceiling"], 4 if day < 7 else 3)
+            observed = 4
+            result = ratchet.daily(self.cfg, self.now + timedelta(days=8))
+            self.assertEqual(runner.call_count, 9)
         data = self.read("ratchets.json")
-        self.assertEqual(data["ceiling"]["open_incidents"], 2)
+        self.assertEqual(data["ceiling"]["open_incidents"], 3)
         self.assertEqual(data["baseline"]["open_incidents"], 4)
         self.assertEqual(result["metrics"]["open_incidents"]["status"], "regression")
         lesson = json.loads((self.state / "lessons.jsonl").read_text())
         self.assertEqual((lesson["kind"], lesson["metric"]), ("ratchet_regression", "open_incidents"))
-        health = next(row for row in board_feed.snapshot(self.cfg, now=(self.now + timedelta(days=2)).isoformat())["health"]
+        health = next(row for row in board_feed.snapshot(self.cfg, now=(self.now + timedelta(days=8)).isoformat())["health"]
                       if row["title"] == "Ratchets")
-        self.assertIn({"label": "Open incidents", "level": "bad", "value": "3 / 2"}, health["rows"])
+        self.assertIn({"label": "Open incidents", "level": "bad", "value": "4 / 3"}, health["rows"])
+
+    def test_ratchet_lessons_do_not_feed_the_repeat_metric(self):
+        ratchet.daily(self.cfg, self.now)
+        path = self.state / "lessons.jsonl"
+        what = "Ratchet regression: human_decisions_per_day"
+        rows = [{"kind": "ratchet_regression", "what": what, "at": self.now.isoformat()}] * 3
+        rows += [{"kind": "worker_fail", "what": what, "at": self.now.isoformat()}] * 2
+        path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+        report = ratchet.daily(self.cfg, self.now + timedelta(days=1))
+        self.assertEqual(report["metrics"]["repeat_lesson_signatures"],
+                         {"value": 0, "ceiling": 0, "status": "ok"})
+        self.assertEqual(len(path.read_text().splitlines()), 5)
+
+    def test_daily_and_manual_write_one_lesson_per_regression_episode(self):
+        self.data["ratchet"]["commands"] = {"example": ["metric"]}
+        readings = [1, 2, 2, 2, None, 2, 1, 2]
+        responses = [subprocess.CompletedProcess([], 0, str(value), "") if value is not None
+                     else subprocess.TimeoutExpired("metric", 10) for value in readings]
+        with patch.object(self.cfg, "run", side_effect=responses):
+            ratchet.daily(self.cfg, self.now)
+            for day, daily in [(1, False), (1, False), (1, True), (2, True),
+                               (3, True), (4, True), (5, True)]:
+                now = self.now + timedelta(days=day)
+                if daily:
+                    ratchet.daily(self.cfg, now)
+                else:
+                    ratchet._run(self.cfg, now=now)
+        lessons = [json.loads(line) for line in (self.state / "lessons.jsonl").read_text().splitlines()]
+        self.assertEqual([(row["metric"], row["at"]) for row in lessons],
+                         [("example", (self.now + timedelta(days=day)).isoformat()) for day in (1, 5)])
+
+    def test_noisy_daily_series_does_not_lower_ceiling(self):
+        self.data["ratchet"]["commands"] = {"example": ["metric"]}
+        values = [4, 2, 3, 2, 3, 4, 2, 3, 2, 3]
+        responses = [subprocess.CompletedProcess([], 0, str(value), "") for value in values]
+        with patch.object(self.cfg, "run", side_effect=responses):
+            for day in range(len(values)):
+                report = ratchet.daily(self.cfg, self.now + timedelta(days=day))
+                self.assertEqual(report["metrics"]["example"]["ceiling"], 4)
+        self.assertFalse((self.state / "lessons.jsonl").exists())
+
+    def test_small_ratio_sample_cannot_set_or_tighten_a_ceiling_to_zero(self):
+        counts = [(0, 1), (1, 5), (0, 4), *[(0, 5)] * 7]
+        for day, (numerator, denominator) in enumerate(counts):
+            with patch("factory.ratchet._run_metrics", return_value={
+                name: (numerator, denominator) for name in ("no_progress_run_ratio", "cost_unknown_ratio")
+            }):
+                report = ratchet.daily(self.cfg, self.now + timedelta(days=day))
+            expected = None if day == 0 else 0 if day == len(counts) - 1 else 0.2
+            for name in ("no_progress_run_ratio", "cost_unknown_ratio"):
+                self.assertEqual(report["metrics"][name]["ceiling"], expected)
 
     def test_history_is_bounded_and_missing_ratios_are_unknown(self):
         for day in range(35):
@@ -123,7 +224,7 @@ class RatchetTests(Fixture):
         self.assertEqual(len(stored["history"]), 30)
         self.assertEqual(stored["history"][-1], stored["last"])
         self.assertEqual(report["metrics"]["cost_unknown_ratio"],
-                         {"value": None, "ceiling": None, "status": "unknown"})
+                         {"value": None, "denominator": 0, "ceiling": None, "status": "unknown"})
         self.assertEqual(report["metrics"]["no_progress_run_ratio"]["status"], "unknown")
 
     def test_idle_and_finish_paths_share_the_daily_gate_and_default_is_off(self):
@@ -151,7 +252,26 @@ class RatchetTests(Fixture):
         self.assertEqual(report["metrics"]["example"],
                          {"value": None, "ceiling": 4, "status": "error", "error": "command timeout"})
 
-    def test_ratchet_wrapper_regression_exit_and_no_baseline_reset(self):
+    def test_manual_checks_do_not_consume_or_fill_daily_samples(self):
+        self.data["ratchet"]["commands"] = {"example": ["metric"]}
+        with patch.object(self.cfg, "run", side_effect=[
+            subprocess.CompletedProcess([], 0, "4", ""),
+            *[subprocess.CompletedProcess([], 0, "1", "")] * 9,
+        ]):
+            ratchet._run(self.cfg, now=self.now, initialize=True)
+            for _ in range(7):
+                ratchet._run(self.cfg, now=self.now)
+            tightened = ratchet._run(self.cfg, now=self.now, tighten=True)
+            self.assertEqual(tightened["metrics"]["example"]["ceiling"], 4)
+            self.assertNotIn("lastDaily", self.read("ratchets.json"))
+            daily = ratchet.daily(self.cfg, self.now)
+            self.assertIsNone(ratchet.daily(self.cfg, self.now))
+        self.assertEqual(daily["metrics"]["example"]["ceiling"], 4)
+        saved = self.read("ratchets.json")
+        self.assertEqual(saved["lastDaily"], self.now.date().isoformat())
+        self.assertEqual(len(saved["dailyHistory"]), 1)
+
+    def test_ratchet_wrapper_regression_exit_and_single_metric_reset(self):
         result = self.cli("factory-ratchet", "init")
         self.assertEqual(result.returncode, 0, result.stderr)
         (self.state / "decisions.jsonl").write_text(json.dumps({
@@ -163,9 +283,48 @@ class RatchetTests(Fixture):
         self.assertEqual(metric, {"value": 1 / 7, "ceiling": 0, "status": "regression"})
         self.assertIn("regression", self.cli("factory-ratchet", "status").stdout)
         self.assertEqual(self.cli("factory-ratchet", "init").returncode, 2)
+        before = self.read("ratchets.json")
+        for name in ("no_progress_run_ratio", "unknown_metric"):
+            result = self.cli("factory-ratchet", "reset", name)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertEqual(self.read("ratchets.json"), before)
+        result = self.cli("factory-ratchet", "reset", "human_decisions_per_day")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        saved = self.read("ratchets.json")
+        for field in ("ceiling", "baseline"):
+            self.assertEqual(saved[field], {**before[field], "human_decisions_per_day": 1 / 7})
+        self.assertEqual(saved["regressed"], [])
+        self.assertEqual(self.cli("factory-ratchet", "check").returncode, 0)
+
+    def test_reset_drops_only_its_own_daily_samples(self):
+        self.data["ratchet"]["commands"] = {"example": ["metric"]}
+        with patch.object(self.cfg, "run", return_value=subprocess.CompletedProcess([], 0, "4", "")) as runner:
+            ratchet.daily(self.cfg, self.now)
+            before = self.read("ratchets.json")
+            ratchet._run(self.cfg, now=self.now, reset="human_decisions_per_day")
+            runner.assert_called_once()
+        saved = self.read("ratchets.json")
+        self.assertEqual(saved["lastDaily"], before["lastDaily"])
+        self.assertEqual(saved["dailyHistory"], [
+            {name: row for name, row in before["dailyHistory"][0].items() if name != "human_decisions_per_day"},
+        ])
 
 
 class FactoryFlagsAndModelsTests(Fixture):
+    def test_model_policy_covers_both_argv_forms_for_judge_and_launcher(self):
+        self.data["models"] = {"forbidden": ["blocked-*"]}
+        for section in ("judge", "launcher"):
+            for command in (["agent", "--model", "blocked-one"], "agent --model=blocked-one",
+                            ["agent", "--model=blocked-one"], "agent --model 'blocked-one'"):
+                with self.subTest(section=section, command=command):
+                    self.data[section] = {"command": command}
+                    with self.assertRaisesRegex(ModelPolicyError, rf"{section}.command --model .* forbidden pattern"):
+                        Config(self.data, self.config)
+            self.data[section] = {"command": ["agent", "--model", "allowed"]}
+        self.data["launcher"]["command"] = ["agent", "--model={model}"]
+        self.data["launch"] = {"env": {"EXAMPLE_MODEL": "blocked-one"}}
+        Config(self.data, self.config)
+
     def test_model_policy_covers_top_level_and_named_worker_roles(self):
         self.data["models"] = {"forbidden": ["model-[lr]*"]}
         with self.assertRaisesRegex(ModelPolicyError, r"roles.orchestrator.model .* forbidden pattern"):

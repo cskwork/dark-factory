@@ -129,9 +129,12 @@ class Config:
             raise ModelPolicyError("invalid models.forbidden: expected a list of patterns")
         for pattern in models.get("forbidden", []):
             roles = self.get("roles", {})
-            if not isinstance(roles, dict):
-                continue
-            self._check_models(roles, pattern, "roles")
+            if isinstance(roles, dict):
+                self._check_models(roles, pattern, "roles")
+            for section in ("judge", "launcher"):
+                settings = self.get(section, {})
+                if isinstance(settings, dict) and argv(settings.get("command")):
+                    self._check_command_models(settings["command"], pattern, section)
 
         ratchet = self.get("ratchet", {})
         commands = ratchet.get("commands", {}) if isinstance(ratchet, dict) else None
@@ -153,6 +156,19 @@ class Config:
                 raise ModelPolicyError(f"{location}.model {model!r} matches forbidden pattern {pattern!r}")
             if path == "roles" and name == "workers":
                 cls._check_models(role, pattern, location)
+
+    @staticmethod
+    def _check_command_models(template, pattern, section):
+        parts = shlex.split(template) if isinstance(template, str) else template
+        for index, part in enumerate(parts[1:], 1):
+            if part == "--model" and index + 1 < len(parts):
+                model = parts[index + 1]
+            elif part.startswith("--model="):
+                model = part.split("=", 1)[1]
+            else:
+                continue
+            if fnmatchcase(model, pattern):
+                raise ModelPolicyError(f"{section}.command --model {model!r} matches forbidden pattern {pattern!r}")
 
     @staticmethod
     def _validate_judge(judge):

@@ -130,35 +130,48 @@ A weekly retro (template in `templates/RETRO.template.md`) groups repeats, prefe
 ### Inference and delivery measurements
 
 Completed Paseo workers record usage or a lookup error in the invocation receipt.
-The next wakes collect detached orchestrator receipts once the agents finish.
+An empty `LastUsage` is unknown, so workers retry once after 3 seconds. Later
+wakes retry empty or temporarily unavailable orchestrator usage for up to 24
+hours from the run start, then record unknown usage with the last error.
+Corrupt pending receipts are quarantined as `*.json.corrupt`.
 Token totals count Paseo input plus output and keep cached input separately.
 A Codex zero cost with observed tokens is unknown. Other launchers report unknown
 usage. Judge verdicts include the usage reported by their Claude Code envelope.
 The board shows today's known worker and orchestrator cost, units with unknown
 cost, measured tokens, and judge cost separately. Queue updates through
 `factory.state` append stage transitions to `delivery.jsonl`.
+A failed append after a queue commit is retried on the next queue write.
+If the log no longer matches the append, the pending record is kept as
+`.delivery-pending.conflict-<timestamp>.json` and queue writes can proceed.
 
 ### Metric ratchets and operating flags
 
-Add `[ratchet]` to `factory.toml` to enable daily checks. The first idle or
-completed tick sets the baseline, and later eligible ticks measure and tighten
+Add `[ratchet]` to `factory.toml` to enable checks on an idle or completed tick,
 at most once each local day. Without this section automatic checks are off.
 
-- `bin/factory-ratchet init` sets the baseline immediately.
+- `bin/factory-ratchet init` sets available baselines before the first tick.
+- `bin/factory-ratchet reset <metric>` re-baselines one metric from a fresh
+  measurement and starts its tightening window over. This can raise its ceiling.
 - `bin/factory-ratchet check [--tighten] [--json]` measures against the saved ceilings.
-  A regression exits 10, appends a lesson and appears in board health.
-  `--tighten` lowers ceilings when a measurement improves.
+  A regression exits 10 and appears in board health. Each regression episode
+  writes one lesson. Manual checks leave the automatic check available that day.
+  `--tighten` applies the same seven-sample rule to saved daily samples.
 - `bin/factory-ratchet status` shows the last check. `ratchets.json` keeps up to 30 checks.
 
+An automatic ceiling only goes down. The maximum of the last seven daily
+samples must be below the ceiling. Ratios need at least five observations on
+each of those days and at least five to establish their first baseline.
 The default metrics are human decisions per day over 7 days, the 7-day share
 of runs with zero work units and of work units without measured usage, and the
-number of lesson signatures seen at least 3 times in 14 days. Ratios without a
-denominator stay unknown until there is data. Each `[ratchet.commands]` entry
+number of lesson signatures seen at least 3 times in 14 days, excluding
+ratchet-generated lessons. Each `[ratchet.commands]` entry
 can collect another metric from an argv command printing one finite number.
 
 `bin/factory-flags status [--json]` shows file switches and config toggles,
 including invalid values. Optional `[models] forbidden` patterns reject matching
-role model IDs during config load and preflight.
+role model IDs and `--model X` or `--model=X` values in `judge.command` and
+`launcher.command` during config load and preflight. Environment variables
+are outside the scan.
 
 ## Context diet and memory
 

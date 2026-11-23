@@ -131,6 +131,10 @@ def _stage(row):
     return row.get("stage") if isinstance(row, dict) else None
 
 
+class _DeliveryConflict(ValueError):
+    """The delivery log no longer matches the pending append."""
+
+
 def _finish_delivery(log, pending, queue):
     try:
         journal = json.loads(pending.read_text(encoding="utf-8"))
@@ -143,11 +147,11 @@ def _finish_delivery(log, pending, queue):
         payload = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
         with log.open("a+b") as stream:
             if stream.tell() < journal["offset"]:
-                raise ValueError("delivery log was shortened during a queue transaction")
+                raise _DeliveryConflict("delivery log was shortened during a queue transaction")
             stream.seek(journal["offset"])
             existing = stream.read()
             if not payload.startswith(existing):
-                raise ValueError("delivery log changed during a queue transaction")
+                raise _DeliveryConflict("delivery log changed during a queue transaction")
             stream.write(payload[len(existing):])
             stream.flush()
             os.fsync(stream.fileno())
@@ -167,8 +171,15 @@ def transaction(directory, filename, callback):
             except FileNotFoundError:
                 pass
             else:
-                _finish_delivery(_target(directory, "delivery.jsonl"),
-                                 _target(directory, ".delivery-pending.json"), data)
+                log = _target(directory, "delivery.jsonl")
+                pending = _target(directory, ".delivery-pending.json")
+                try:
+                    _finish_delivery(log, pending, data)
+                except _DeliveryConflict as error:
+                    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+                    conflict = pending.with_name(f".delivery-pending.conflict-{stamp}.json")
+                    pending.rename(conflict)
+                    print(f"{error}; moved pending append to {conflict.name}", file=sys.stderr)
         before = json.loads(json.dumps(data))
         callback(data)
         if queue:
@@ -199,7 +210,10 @@ def transaction(directory, filename, callback):
                 write_json(pending, {"offset": offset, "rows": rows})
         write_json(target, data)
         if queue and rows:
-            _finish_delivery(log, pending, data)
+            try:
+                _finish_delivery(log, pending, data)
+            except (OSError, _DeliveryConflict) as error:
+                print(f"queue committed; delivery append pending: {error}", file=sys.stderr)
         return data
 
 

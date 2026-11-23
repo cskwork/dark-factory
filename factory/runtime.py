@@ -868,6 +868,9 @@ def worker(cfg, role, title, brief, timeout="90m", token=None, key=None, unit="u
         elapsed = time.monotonic() - clock_started
         mapping = cfg.get("roles", {}).get("workers", {}).get(role, {})
         usage, usage_error = paseo_usage(cfg, target, mapping["provider"], runner=usage_runner, env=env)
+        if usage_error == "empty-last-usage":
+            time.sleep(3)
+            usage, usage_error = paseo_usage(cfg, target, mapping["provider"], runner=usage_runner, env=env)
         observations = {name: {"value": usage[name], "source": usage["source"]} for name in ("tokens", "costUsd")
                         if usage is not None and usage[name] is not None}
         metadata = {"attemptId": attempt_id, "key": key, "unit": unit, "role": role,
